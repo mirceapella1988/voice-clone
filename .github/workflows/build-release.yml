@@ -20,7 +20,7 @@ jobs:
           - platform: "macos-latest" # macos-latest is x86_64/arm64
             args: "--target universal-apple-darwin"
           - platform: "windows-latest"
-            args: ""
+            args: "--bundles msi"
 
     runs-on: ${{ matrix.platform }}
     steps:
