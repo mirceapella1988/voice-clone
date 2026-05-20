@@ -658,6 +658,16 @@ input[type="range"]::-webkit-slider-thumb:hover {
   font-weight: 700;
 }
 
+.btn-control.btn-download {
+  text-decoration: none;
+}
+
+.btn-control[aria-disabled="true"] {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 .btn-action {
   background: var(--accent-subtle);
   border: 1px solid rgba(124, 109, 240, 0.25);

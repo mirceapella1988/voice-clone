@@ -6,6 +6,7 @@ interface AudioPlayerProps {
   onCrop?: (croppedData: Float32Array | null) => void;
   label?: string;
   idPrefix?: string;
+  downloadFileName?: string;
 }
 
 const PLAYBACK_RATES = [1.0, 1.2, 1.5, 2.0, 0.75, 0.85];
@@ -16,6 +17,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   onCrop,
   label = "Audio Player",
   idPrefix = "audio-player",
+  downloadFileName,
 }) => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -524,6 +526,24 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
             </svg>
           )}
         </button>
+
+        {downloadFileName && (
+          <a
+            className="btn-control btn-download"
+            href={audioUrl || undefined}
+            download={downloadFileName}
+            aria-disabled={!audioUrl || isProcessing}
+            onClick={(e) => {
+              if (!audioUrl || isProcessing) e.preventDefault();
+            }}
+            aria-label="Tải WAV"
+            title="Tải WAV"
+          >
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+              <path d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z" />
+            </svg>
+          </a>
+        )}
 
         {cropStart !== null && cropEnd !== null && (
           <button className="btn-action btn-crop-apply" onClick={applyCrop}>

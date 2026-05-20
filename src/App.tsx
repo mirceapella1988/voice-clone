@@ -793,6 +793,7 @@ export default function App() {
                 sampleRate={outputSampleRate}
                 label="Giọng Nói Sinh Ra"
                 idPrefix="output-player"
+                downloadFileName="voice-clone-output.wav"
               />
             </div>
           )}
