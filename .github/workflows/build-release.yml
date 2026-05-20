@@ -35,25 +35,7 @@ jobs:
         run: pip install huggingface_hub
 
       - name: Download models from Hugging Face
-        run: |
-          python -c "
-          import os
-          from huggingface_hub import hf_hub_download
-          MODEL_REPO = 'zxczx221312/OmniVoice-WebGPU-ONNX'
-          files = [
-              'omnivoice-config.json',
-              'tokenizer.json',
-              'omnivoice-decoder-webgpu.onnx',
-              'omnivoice-encoder-fixed.onnx',
-              'omnivoice-main-kv-fp16-b1.onnx',
-              'omnivoice-main-kv-fp16-b1.onnx_data'
-          ]
-          local_dir = 'src-python/models'
-          os.makedirs(local_dir, exist_ok=True)
-          for f in files:
-              print(f'Downloading {f}...')
-              hf_hub_download(repo_id=MODEL_REPO, filename=f, local_dir=local_dir, local_files_only=False)
-          "
+        run: python src-python/download_models.py
 
       - name: setup node
         uses: actions/setup-node@v4
