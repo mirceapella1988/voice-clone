@@ -26,3 +26,12 @@ dist-ssr
 # Heavy models
 src-python/models/
 
+# PyInstaller & Tauri Binaries
+build/
+dist/
+*.spec
+src-tauri/binaries/*
+!src-tauri/binaries/sidecar-aarch64-apple-darwin
+!src-tauri/binaries/sidecar-x86_64-apple-darwin
+!src-tauri/binaries/sidecar-x86_64-pc-windows-msvc.exe
+

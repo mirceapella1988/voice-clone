@@ -516,7 +516,11 @@ class OmniVoiceRuntime:
         return providers
 
     def _get_model_file(self, filename):
-        local_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+        resources_dir = os.environ.get("APP_RESOURCES_DIR")
+        if resources_dir:
+            local_dir = os.path.join(resources_dir, "src-python", "models")
+        else:
+            local_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
         # Thử tải từ local cache trước (Offline mode)
         try:
             return hf_hub_download(

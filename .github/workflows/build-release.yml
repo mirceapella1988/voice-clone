@@ -17,8 +17,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: "macos-latest" # macos-latest is x86_64/arm64
-            args: "--target universal-apple-darwin"
+          - platform: "macos-latest"
+            args: "--target aarch64-apple-darwin"
           - platform: "windows-latest"
             args: "--bundles msi"
 
@@ -31,11 +31,23 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install huggingface_hub
-        run: pip install huggingface_hub
+      - name: Install Python dependencies & PyInstaller
+        run: |
+          pip install -r src-python/requirements.txt
+          pip install pyinstaller
 
       - name: Download models from Hugging Face
         run: python src-python/download_models.py
+
+      - name: Build Python Sidecar Binary
+        shell: bash
+        run: |
+          mkdir -p src-tauri/binaries
+          if [ "${{ matrix.platform }}" = "windows-latest" ]; then
+            pyinstaller --clean -y --onefile --distpath src-tauri/binaries --name sidecar-x86_64-pc-windows-msvc src-python/sidecar.py
+          else
+            pyinstaller --clean -y --onefile --distpath src-tauri/binaries --name sidecar-aarch64-apple-darwin src-python/sidecar.py
+          fi
 
       - name: setup node
         uses: actions/setup-node@v4
@@ -45,8 +57,7 @@ jobs:
       - name: install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          # Those targets are only needed on macOS for universal binary
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || '' }}
 
       - name: install dependencies (ubuntu only)
         if: matrix.platform == 'ubuntu-22.04'

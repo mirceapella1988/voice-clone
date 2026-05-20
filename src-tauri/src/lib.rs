@@ -47,8 +47,28 @@ pub fn run() {
             stdin: Mutex::new(None),
         })
         .setup(|app| {
+            let target_triple = if cfg!(target_os = "windows") {
+                "x86_64-pc-windows-msvc"
+            } else if cfg!(target_os = "macos") {
+                if cfg!(target_arch = "aarch64") {
+                    "aarch64-apple-darwin"
+                } else {
+                    "x86_64-apple-darwin"
+                }
+            } else {
+                "x86_64-unknown-linux-gnu"
+            };
+            
+            #[cfg(target_os = "windows")]
+            let ext = ".exe";
+            #[cfg(not(target_os = "windows"))]
+            let ext = "";
+            
+            let binary_name = format!("sidecar-{}{}", target_triple, ext);
+            
             let mut sidecar_candidates = Vec::new();
             if let Ok(resource_dir) = app.path().resource_dir() {
+                sidecar_candidates.push(resource_dir.join("binaries").join(&binary_name));
                 sidecar_candidates.push(resource_dir.join("src-python").join("sidecar.py"));
             }
             if let Ok(current_dir) = std::env::current_dir() {
@@ -71,31 +91,49 @@ pub fn run() {
                 return Ok(());
             };
             let sidecar_dir = sidecar_path.parent().map(|path| path.to_path_buf());
+            let is_script = sidecar_path.extension().map_or(false, |ext| ext == "py");
 
-            // Thử chạy python3, fallback sang python nếu lỗi
-            let mut python3 = Command::new("python3");
-            python3
-                .arg(&sidecar_path)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::inherit());
-            if let Some(dir) = &sidecar_dir {
-                python3.current_dir(dir);
-            }
-            let mut child_process = python3.spawn();
-
-            if child_process.is_err() {
-                let mut python = Command::new("python");
-                python
+            let child_process = if !is_script {
+                // Chạy trực tiếp binary sidecar đóng gói
+                let mut cmd = Command::new(&sidecar_path);
+                cmd.stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::inherit());
+                if let Ok(resource_dir) = app.path().resource_dir() {
+                    cmd.env("APP_RESOURCES_DIR", resource_dir);
+                }
+                if let Some(dir) = &sidecar_dir {
+                    cmd.current_dir(dir);
+                }
+                cmd.spawn()
+            } else {
+                // Chạy script python (chế độ dev)
+                let mut python3 = Command::new("python3");
+                python3
                     .arg(&sidecar_path)
                     .stdin(Stdio::piped())
                     .stdout(Stdio::piped())
                     .stderr(Stdio::inherit());
                 if let Some(dir) = &sidecar_dir {
-                    python.current_dir(dir);
+                    python3.current_dir(dir);
                 }
-                child_process = python.spawn();
-            }
+                let spawn_res = python3.spawn();
+                
+                if spawn_res.is_err() {
+                    let mut python = Command::new("python");
+                    python
+                        .arg(&sidecar_path)
+                        .stdin(Stdio::piped())
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::inherit());
+                    if let Some(dir) = &sidecar_dir {
+                        python.current_dir(dir);
+                    }
+                    python.spawn()
+                } else {
+                    spawn_res
+                }
+            };
 
             match child_process {
                 Ok(mut child) => {

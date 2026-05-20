@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Voice Clone",
-  "version": "0.1.0",
-  "identifier": "com.omnivoice.clone",
+  "version": "0.1.6",
+  "identifier": "com.kiyooo.clone",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -27,6 +27,7 @@
   },
   "bundle": {
     "active": true,
+    "publisher": "kiyooo",
     "targets": "all",
     "icon": [
       "icons/32x32.png",
@@ -34,6 +35,9 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
+    ],
+    "externalBin": [
+      "binaries/sidecar"
     ],
     "resources": {
       "../src-python/sidecar.py": "src-python/sidecar.py",
