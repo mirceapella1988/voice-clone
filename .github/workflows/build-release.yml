@@ -23,13 +23,6 @@ jobs:
             args: "--bundles msi"
 
     runs-on: ${{ matrix.platform }}
-    env:
-      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
     steps:
       - uses: actions/checkout@v4
 
@@ -89,14 +82,21 @@ jobs:
       - name: Configure macOS signing
         if: matrix.platform == 'macos-latest'
         shell: bash
+        env:
+          SECRET_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          SECRET_APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          SECRET_APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          SECRET_APPLE_ID: ${{ secrets.APPLE_ID }}
+          SECRET_APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          SECRET_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           required=(
-            APPLE_CERTIFICATE
-            APPLE_CERTIFICATE_PASSWORD
-            APPLE_SIGNING_IDENTITY
-            APPLE_ID
-            APPLE_PASSWORD
-            APPLE_TEAM_ID
+            SECRET_APPLE_CERTIFICATE
+            SECRET_APPLE_CERTIFICATE_PASSWORD
+            SECRET_APPLE_SIGNING_IDENTITY
+            SECRET_APPLE_ID
+            SECRET_APPLE_PASSWORD
+            SECRET_APPLE_TEAM_ID
           )
 
           configured=0
@@ -119,6 +119,14 @@ jobs:
             echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
             echo "::warning::No Apple Developer ID signing/notarization secrets configured. Using ad-hoc signing for macOS. This avoids unsigned Apple Silicon bundles, but public distribution should use Developer ID signing and notarization."
           else
+            {
+              echo "APPLE_CERTIFICATE=$SECRET_APPLE_CERTIFICATE"
+              echo "APPLE_CERTIFICATE_PASSWORD=$SECRET_APPLE_CERTIFICATE_PASSWORD"
+              echo "APPLE_SIGNING_IDENTITY=$SECRET_APPLE_SIGNING_IDENTITY"
+              echo "APPLE_ID=$SECRET_APPLE_ID"
+              echo "APPLE_PASSWORD=$SECRET_APPLE_PASSWORD"
+              echo "APPLE_TEAM_ID=$SECRET_APPLE_TEAM_ID"
+            } >> "$GITHUB_ENV"
             echo "Using Apple Developer ID signing and notarization for macOS."
           fi
 
