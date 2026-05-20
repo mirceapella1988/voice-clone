@@ -23,6 +23,13 @@ jobs:
             args: "--bundles msi"
 
     runs-on: ${{ matrix.platform }}
+    env:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
     steps:
       - uses: actions/checkout@v4
 
@@ -79,6 +86,42 @@ jobs:
       - name: install frontend dependencies
         run: npm install
 
+      - name: Configure macOS signing
+        if: matrix.platform == 'macos-latest'
+        shell: bash
+        run: |
+          required=(
+            APPLE_CERTIFICATE
+            APPLE_CERTIFICATE_PASSWORD
+            APPLE_SIGNING_IDENTITY
+            APPLE_ID
+            APPLE_PASSWORD
+            APPLE_TEAM_ID
+          )
+
+          configured=0
+          missing=()
+          for key in "${required[@]}"; do
+            if [ -n "${!key:-}" ]; then
+              configured=1
+            else
+              missing+=("$key")
+            fi
+          done
+
+          if [ "$configured" -eq 1 ] && [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Incomplete macOS signing/notarization secrets. Missing: ${missing[*]}"
+            echo "::error::Set all required Apple secrets, or remove the partial Apple secrets to use ad-hoc signing for draft/internal builds."
+            exit 1
+          fi
+
+          if [ "$configured" -eq 0 ]; then
+            echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
+            echo "::warning::No Apple Developer ID signing/notarization secrets configured. Using ad-hoc signing for macOS. This avoids unsigned Apple Silicon bundles, but public distribution should use Developer ID signing and notarization."
+          else
+            echo "Using Apple Developer ID signing and notarization for macOS."
+          fi
+
       - name: Build and release Tauri App
         uses: tauri-apps/tauri-action@v0
         env:
@@ -86,7 +129,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Voice Clone v__VERSION__"
-          releaseBody: "Bản phát hành tự động cho Voice Clone."
+          releaseBody: "Bản phát hành tự động cho Voice Clone. macOS public distribution requires Apple Developer ID signing and notarization; otherwise the draft build is ad-hoc signed for internal testing."
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
