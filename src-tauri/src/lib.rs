@@ -1,5 +1,6 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use tauri::{Emitter, Manager, State};
@@ -7,6 +8,78 @@ use tauri::{Emitter, Manager, State};
 struct SidecarState {
     child: Mutex<Option<std::process::Child>>,
     stdin: Mutex<Option<std::process::ChildStdin>>,
+}
+
+fn push_sidecar_candidate(candidates: &mut Vec<PathBuf>, path: PathBuf) {
+    if !candidates.iter().any(|candidate| candidate == &path) {
+        candidates.push(path);
+    }
+}
+
+fn is_usable_sidecar_candidate(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+
+    if path.extension().is_some_and(|ext| ext == "py") {
+        return cfg!(debug_assertions);
+    }
+
+    path.metadata()
+        .map(|metadata| metadata.len() > 1024)
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_usable_sidecar_candidate, push_sidecar_candidate};
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let millis = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        std::env::temp_dir().join(format!("voice-clone-{name}-{millis}"))
+    }
+
+    #[test]
+    fn sidecar_candidate_filter_skips_dummy_binary() {
+        let dir = temp_dir("dummy-sidecar");
+        fs::create_dir_all(&dir).unwrap();
+        let dummy = dir.join("sidecar.exe");
+        fs::write(&dummy, b"# dummy\n").unwrap();
+
+        assert!(!is_usable_sidecar_candidate(&dummy));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn sidecar_candidate_filter_accepts_dev_script_in_debug() {
+        let dir = temp_dir("script-sidecar");
+        fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("sidecar.py");
+        fs::write(&script, b"print('ok')\n").unwrap();
+
+        assert!(is_usable_sidecar_candidate(&script));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn push_sidecar_candidate_keeps_order_without_duplicates() {
+        let mut candidates = Vec::new();
+        let first = std::path::PathBuf::from("sidecar.exe");
+        let second = std::path::PathBuf::from("sidecar-x86_64-pc-windows-msvc.exe");
+
+        push_sidecar_candidate(&mut candidates, first.clone());
+        push_sidecar_candidate(&mut candidates, second.clone());
+        push_sidecar_candidate(&mut candidates, first.clone());
+
+        assert_eq!(candidates, vec![first, second]);
+    }
 }
 
 #[tauri::command]
@@ -17,9 +90,7 @@ fn send_to_sidecar(state: State<'_, SidecarState>, msg: String) -> Result<(), St
             if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
                 *child_guard = None;
                 *state.stdin.lock().map_err(|e| e.to_string())? = None;
-                return Err(format!(
-                    "Python sidecar exited before handling command: {status}"
-                ));
+                return Err(format!("Sidecar exited before handling command: {status}"));
             }
         } else {
             return Err("Python sidecar is not running".to_string());
@@ -58,32 +129,50 @@ pub fn run() {
             } else {
                 "x86_64-unknown-linux-gnu"
             };
-            
+
             #[cfg(target_os = "windows")]
             let ext = ".exe";
             #[cfg(not(target_os = "windows"))]
             let ext = "";
-            
+
             let binary_name = format!("sidecar-{}{}", target_triple, ext);
-            
+            let runtime_binary_name = format!("sidecar{}", ext);
+
             let mut sidecar_candidates = Vec::new();
-            if let Ok(resource_dir) = app.path().resource_dir() {
-                sidecar_candidates.push(resource_dir.join(&binary_name));
-                sidecar_candidates.push(resource_dir.join("binaries").join(&binary_name));
-                sidecar_candidates.push(resource_dir.join("src-python").join("sidecar.py"));
-            }
-            if let Ok(current_dir) = std::env::current_dir() {
-                if current_dir.ends_with("src-tauri") {
-                    if let Some(parent) = current_dir.parent() {
-                        sidecar_candidates.push(parent.join("src-python").join("sidecar.py"));
-                    }
+            if let Ok(current_exe) = std::env::current_exe() {
+                if let Some(exe_dir) = current_exe.parent() {
+                    push_sidecar_candidate(&mut sidecar_candidates, exe_dir.join(&runtime_binary_name));
+                    push_sidecar_candidate(&mut sidecar_candidates, exe_dir.join(&binary_name));
                 }
-                sidecar_candidates.push(current_dir.join("src-python").join("sidecar.py"));
+            }
+            if let Ok(resource_dir) = app.path().resource_dir() {
+                push_sidecar_candidate(&mut sidecar_candidates, resource_dir.join(&runtime_binary_name));
+                push_sidecar_candidate(&mut sidecar_candidates, resource_dir.join(&binary_name));
+                push_sidecar_candidate(&mut sidecar_candidates, resource_dir.join("binaries").join(&binary_name));
+                if cfg!(debug_assertions) {
+                    push_sidecar_candidate(&mut sidecar_candidates, resource_dir.join("src-python").join("sidecar.py"));
+                }
+            }
+            if cfg!(debug_assertions) {
+                if let Ok(current_dir) = std::env::current_dir() {
+                    if current_dir.ends_with("src-tauri") {
+                        if let Some(parent) = current_dir.parent() {
+                            push_sidecar_candidate(&mut sidecar_candidates, parent.join("src-python").join("sidecar.py"));
+                        }
+                    }
+                    push_sidecar_candidate(&mut sidecar_candidates, current_dir.join("src-python").join("sidecar.py"));
+                }
             }
 
-            let Some(sidecar_path) = sidecar_candidates.into_iter().find(|path| path.exists())
+            let Some(sidecar_path) = sidecar_candidates
+                .into_iter()
+                .find(|path| is_usable_sidecar_candidate(path))
             else {
-                let message = "Failed to find Python sidecar in app resources or project directory";
+                let message = if cfg!(debug_assertions) {
+                    "Failed to find a usable Python sidecar binary or dev script"
+                } else {
+                    "Failed to find bundled Python sidecar binary. Please reinstall the app or rebuild the Windows release."
+                };
                 eprintln!("{message}");
                 let _ = app.emit(
                     "sidecar-event",
@@ -119,7 +208,7 @@ pub fn run() {
                     python3.current_dir(dir);
                 }
                 let spawn_res = python3.spawn();
-                
+
                 if spawn_res.is_err() {
                     let mut python = Command::new("python");
                     python
