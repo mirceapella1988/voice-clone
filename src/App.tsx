@@ -21,6 +21,25 @@ interface Metrics {
   tokensPerSec: number;
 }
 
+interface LanguageOption {
+  value: string;
+  label: string;
+}
+
+const LANGUAGE_OPTIONS: LanguageOption[] = [
+  { value: "Auto", label: "Auto" },
+  { value: "vi", label: "Vietnamese (vi)" },
+  { value: "en", label: "English (en)" },
+  { value: "zh", label: "Chinese (zh)" },
+  { value: "ja", label: "Japanese (ja)" },
+  { value: "ko", label: "Korean (ko)" },
+  { value: "fr", label: "French (fr)" },
+  { value: "de", label: "German (de)" },
+  { value: "es", label: "Spanish (es)" },
+  { value: "th", label: "Thai (th)" },
+  { value: "id", label: "Indonesian (id)" },
+];
+
 export default function App() {
   // Model state
   const [modelStatus, setModelStatus] = useState<"unloaded" | "loading" | "ready">("unloaded");
@@ -34,6 +53,7 @@ export default function App() {
   // Target speech input
   const [targetText, setTargetText] = useState("Chào bạn! Đây là bản thử nghiệm tính năng nhân bản giọng nói tiếng Việt chạy local trên máy tính.");
   const [instructText, setInstructText] = useState("");
+  const [selectedLanguage, setSelectedLanguage] = useState("vi");
 
   // Tab state: "preset" | "custom"
   const [activeTab, setActiveTab] = useState<"preset" | "custom">("preset");
@@ -463,13 +483,15 @@ export default function App() {
           guidance_scale: cfgStrength,
           infer_steps: inferSteps,
           num_step: inferSteps,
-          language_id: "vi",
+          language_id: selectedLanguage,
+          ref_sample_rate: refSampleRate,
           speed,
           duration: typeof duration === "number" && duration > 0 ? duration : null,
         },
       };
 
-      appendLog("Sending generate command to Python sidecar...");
+      const languageLabel = LANGUAGE_OPTIONS.find((option) => option.value === selectedLanguage)?.label || selectedLanguage;
+      appendLog(`Sending generate command to Python sidecar (language: ${languageLabel})...`);
       await invoke("send_to_sidecar", {
         msg: JSON.stringify(payload),
       });
@@ -648,6 +670,20 @@ export default function App() {
 
           {/* Target Text & Generation */}
           <div className="glass-panel panel-flex gap-md">
+            <div className="form-group">
+              <label>Language</label>
+              <select
+                value={selectedLanguage}
+                onChange={(e) => setSelectedLanguage(e.target.value)}
+              >
+                {LANGUAGE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             <div className="form-group">
               <label>Văn bản cần sinh giọng (Target Text)</label>
               <textarea

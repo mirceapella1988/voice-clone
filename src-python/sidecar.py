@@ -38,17 +38,20 @@ class SidecarApp:
     def run_inference(self, text, ref_audio, ref_text, instruct, params):
         self.is_generating = True
         self.cancel_event.clear()
+        params = params or {}
         
         start_time = time.time()
         try:
             # Giải mã ref_audio nếu có
             ref_audio_np = None
+            ref_sample_rate = params.get("ref_sample_rate")
             if ref_audio is not None:
                 if isinstance(ref_audio, str):
                     # Giả định ref_audio là base64 WAV
                     audio_bytes = base64.b64decode(ref_audio)
                     with wave.open(io.BytesIO(audio_bytes), 'rb') as wav:
                         params_wav = wav.getparams()
+                        ref_sample_rate = params_wav.framerate
                         frames = wav.readframes(params_wav.nframes)
                         # Chuyển đổi sang float32 mono
                         if params_wav.sampwidth == 2:
@@ -69,7 +72,7 @@ class SidecarApp:
                 ref_audio=ref_audio_np,
                 ref_text=ref_text,
                 instruct=instruct,
-                params=params,
+                params={**params, "ref_sample_rate": ref_sample_rate},
                 cancel_flag=self.cancel_flag
             )
 

@@ -243,6 +243,31 @@ def compute_rms(audio):
     return np.sqrt(np.mean(audio ** 2))
 
 
+def resample_audio_mono(audio, source_sample_rate, target_sample_rate):
+    audio = np.asarray(audio, dtype=np.float32)
+    if audio.ndim > 1:
+        audio = np.mean(audio, axis=0 if audio.shape[0] <= audio.shape[-1] else 1)
+
+    if len(audio) == 0:
+        return audio
+
+    source_sample_rate = int(source_sample_rate or target_sample_rate)
+    target_sample_rate = int(target_sample_rate)
+    if source_sample_rate <= 0:
+        raise ValueError("Reference audio sample rate must be positive.")
+
+    if source_sample_rate == target_sample_rate:
+        return audio.astype(np.float32, copy=False)
+
+    target_len = max(1, int(round(len(audio) * target_sample_rate / source_sample_rate)))
+    if len(audio) == 1:
+        return np.full(target_len, audio[0], dtype=np.float32)
+
+    source_positions = np.arange(len(audio), dtype=np.float64)
+    target_positions = np.linspace(0, len(audio) - 1, target_len, dtype=np.float64)
+    return np.interp(target_positions, source_positions, audio).astype(np.float32)
+
+
 def db_to_amplitude(db):
     return 10 ** (db / 20.0)
 
@@ -592,6 +617,7 @@ class OmniVoiceRuntime:
         audio_chunk_duration = params.get("audio_chunk_duration", 15.0)
         audio_chunk_threshold = params.get("audio_chunk_threshold", 30.0)
         language_id = params.get("language_id", None)
+        ref_sample_rate = params.get("ref_sample_rate", self.config["sampling_rate"])
         speed = params.get("speed", 1.0)
         duration = params.get("duration", None)
 
@@ -603,6 +629,15 @@ class OmniVoiceRuntime:
         ref_rms = None
 
         if processed_ref_audio is not None:
+            target_sample_rate = self.config["sampling_rate"]
+            if int(ref_sample_rate or target_sample_rate) != int(target_sample_rate):
+                self.emit(f"Resampling reference audio to {target_sample_rate} Hz...", 4)
+                processed_ref_audio = resample_audio_mono(
+                    processed_ref_audio,
+                    ref_sample_rate,
+                    target_sample_rate,
+                )
+
             ref_rms = compute_rms(processed_ref_audio)
             if 0 < ref_rms < 0.1:
                 scale = 0.1 / ref_rms
