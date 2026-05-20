@@ -21,6 +21,29 @@ interface Metrics {
   tokensPerSec: number;
 }
 
+interface ReferenceDiagnostics {
+  input_source?: string;
+  input_wav_sample_rate?: number;
+  input_wav_channels?: number;
+  input_wav_sample_width?: number;
+  input_wav_frames?: number;
+  reference_raw_sample_rate?: number;
+  reference_raw_duration_seconds?: number;
+  reference_raw_rms?: number;
+  reference_resample_method?: string;
+  reference_processed_sample_rate?: number;
+  reference_processed_duration_seconds?: number;
+  reference_processed_rms?: number;
+  reference_token_count?: number;
+  target_token_count?: number;
+  chunk_count?: number;
+  guidance_scale?: number;
+  denoise?: boolean;
+  preprocess_prompt?: boolean;
+  postprocess_output?: boolean;
+  language_id?: string | null;
+}
+
 interface LanguageOption {
   value: string;
   label: string;
@@ -64,8 +87,6 @@ export default function App() {
   const [refText, setRefText] = useState("");
 
   // Inference advanced parameters
-  const [temperature, setTemperature] = useState(1.0);
-  const [topP, setTopP] = useState(0.95);
   const [cfgStrength, setCfgStrength] = useState(2.0);
   const [inferSteps, setInferSteps] = useState(32);
   const [speed, setSpeed] = useState(1.0);
@@ -91,6 +112,7 @@ export default function App() {
   // Logs & Metrics
   const [logs, setLogs] = useState<string[]>([]);
   const [metrics, setMetrics] = useState<Metrics | null>(null);
+  const [referenceDiagnostics, setReferenceDiagnostics] = useState<ReferenceDiagnostics | null>(null);
 
   // Offline Audio Context to decode reference wav files
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -189,6 +211,21 @@ export default function App() {
     });
   };
 
+  const mixAudioBufferToMono = (audioBuffer: AudioBuffer): Float32Array => {
+    if (audioBuffer.numberOfChannels === 1) {
+      return new Float32Array(audioBuffer.getChannelData(0));
+    }
+
+    const mono = new Float32Array(audioBuffer.length);
+    for (let channel = 0; channel < audioBuffer.numberOfChannels; channel++) {
+      const channelData = audioBuffer.getChannelData(channel);
+      for (let i = 0; i < mono.length; i++) {
+        mono[i] += channelData[i] / audioBuffer.numberOfChannels;
+      }
+    }
+    return mono;
+  };
+
   // Manual WAV parser fallback (khi AudioContext không hoạt động)
   const parseWavManual = (buffer: ArrayBuffer): { data: Float32Array; sampleRate: number } => {
     const view = new DataView(buffer);
@@ -197,8 +234,10 @@ export default function App() {
     if (riff !== "RIFF") throw new Error("Not a valid WAV file");
 
     const sr = view.getUint32(24, true);
+    const numChannels = view.getUint16(22, true);
     const bitsPerSample = view.getUint16(34, true);
     const blockAlign = view.getUint16(32, true);
+    const bytesPerSample = bitsPerSample / 8;
 
     // Find data chunk
     let dataOffset = 44;
@@ -224,24 +263,36 @@ export default function App() {
 
     if (bitsPerSample === 16) {
       for (let i = 0; i < samplesPerChannel; i++) {
-        const byteIdx = dataOffset + i * blockAlign;
-        if (byteIdx + 1 < buffer.byteLength) {
-          floatData[i] = view.getInt16(byteIdx, true) / 32768.0;
+        let sum = 0;
+        for (let channel = 0; channel < numChannels; channel++) {
+          const byteIdx = dataOffset + i * blockAlign + channel * bytesPerSample;
+          if (byteIdx + 1 < buffer.byteLength) {
+            sum += view.getInt16(byteIdx, true) / 32768.0;
+          }
         }
+        floatData[i] = sum / numChannels;
       }
     } else if (bitsPerSample === 8) {
       for (let i = 0; i < samplesPerChannel; i++) {
-        const byteIdx = dataOffset + i * blockAlign;
-        if (byteIdx < buffer.byteLength) {
-          floatData[i] = (view.getUint8(byteIdx) - 128) / 128.0;
+        let sum = 0;
+        for (let channel = 0; channel < numChannels; channel++) {
+          const byteIdx = dataOffset + i * blockAlign + channel * bytesPerSample;
+          if (byteIdx < buffer.byteLength) {
+            sum += (view.getUint8(byteIdx) - 128) / 128.0;
+          }
         }
+        floatData[i] = sum / numChannels;
       }
     } else if (bitsPerSample === 32) {
       for (let i = 0; i < samplesPerChannel; i++) {
-        const byteIdx = dataOffset + i * blockAlign;
-        if (byteIdx + 3 < buffer.byteLength) {
-          floatData[i] = view.getFloat32(byteIdx, true);
+        let sum = 0;
+        for (let channel = 0; channel < numChannels; channel++) {
+          const byteIdx = dataOffset + i * blockAlign + channel * bytesPerSample;
+          if (byteIdx + 3 < buffer.byteLength) {
+            sum += view.getFloat32(byteIdx, true);
+          }
         }
+        floatData[i] = sum / numChannels;
       }
     } else {
       throw new Error(`Unsupported bits per sample: ${bitsPerSample}`);
@@ -276,7 +327,7 @@ export default function App() {
           ),
         ]);
         return {
-          data: audioBuffer.getChannelData(0),
+          data: mixAudioBufferToMono(audioBuffer),
           sampleRate: audioBuffer.sampleRate,
         };
       }
@@ -330,6 +381,14 @@ export default function App() {
               setOutputSampleRate(sampleRate);
             });
             setMetrics(data.metrics);
+            if (data.diagnostics) {
+              const processedDuration = data.diagnostics.reference_processed_duration_seconds;
+              setReferenceDiagnostics(data.diagnostics);
+              appendLog(
+                `Reference diagnostics: ${typeof processedDuration === "number" ? processedDuration.toFixed(2) : "?"}s, ` +
+                `${data.diagnostics.reference_token_count ?? "?"} ref tokens, resample=${data.diagnostics.reference_resample_method ?? "unknown"}`
+              );
+            }
             setIsGenerating(false);
             setGenerateProgress(100);
             setGenerateStatus("Hoàn thành");
@@ -339,8 +398,13 @@ export default function App() {
             setGenerateStatus("Đã ngắt");
           } else if (data.type === "error") {
             appendLog(`Sidecar Error: ${data.message}`);
+            if (data.diagnostics) {
+              setReferenceDiagnostics(data.diagnostics);
+            }
             setIsGenerating(false);
             setGenerateStatus(`Lỗi: ${data.message}`);
+          } else if (data.type === "stderr") {
+            appendLog(`Sidecar stderr: ${data.message}`);
           }
         } catch (err) {
           appendLog(`Failed to parse sidecar message: ${event.payload}`);
@@ -462,6 +526,7 @@ export default function App() {
     setGenerateStatus("Đang xử lý âm thanh mẫu...");
     setOutputAudioData(null);
     setMetrics(null);
+    setReferenceDiagnostics(null);
 
     try {
       let refAudioB64 = null;
@@ -477,8 +542,6 @@ export default function App() {
         ref_text: refText,
         instruct: instructText,
         params: {
-          temperature,
-          top_p: topP,
           cfg_strength: cfgStrength,
           guidance_scale: cfgStrength,
           infer_steps: inferSteps,
@@ -487,6 +550,9 @@ export default function App() {
           ref_sample_rate: refSampleRate,
           speed,
           duration: typeof duration === "number" && duration > 0 ? duration : null,
+          denoise: true,
+          preprocess_prompt: true,
+          postprocess_output: true,
         },
       };
 
@@ -516,6 +582,12 @@ export default function App() {
   useEffect(() => {
     consoleEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [logs]);
+
+  const formatDiagnosticSeconds = (value?: number) =>
+    typeof value === "number" && Number.isFinite(value) ? `${value.toFixed(2)}s` : "—";
+
+  const formatDiagnosticNumber = (value?: number, digits = 0) =>
+    typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "—";
 
   return (
     <main className="app-shell">
@@ -702,27 +774,11 @@ export default function App() {
                 placeholder="Để trống để giữ nguyên giọng mẫu. Ví dụ: male, whisper, low pitch..."
               />
               <span className="input-helper">
-                Để trống để giữ giọng mẫu gốc. Nếu nhập Instruct cho giọng nam (như Bình), bạn cần thêm từ khóa <code>male</code> để tránh bị chuyển thành giọng nữ mặc định.
+                Để trống để clone thuần theo giọng mẫu. Instruct có thể thay đổi giới tính/cao độ/phong cách và làm giọng lệch khỏi reference audio.
               </span>
             </div>
 
             <div className="params-grid">
-              <div className="form-group">
-                <label>Temperature: {temperature.toFixed(2)}</label>
-                <input
-                  type="range" min="0.1" max="2.0" step="0.05"
-                  value={temperature}
-                  onChange={(e) => setTemperature(parseFloat(e.target.value))}
-                />
-              </div>
-              <div className="form-group">
-                <label>Top-P: {topP.toFixed(2)}</label>
-                <input
-                  type="range" min="0.1" max="1.0" step="0.01"
-                  value={topP}
-                  onChange={(e) => setTopP(parseFloat(e.target.value))}
-                />
-              </div>
               <div className="form-group">
                 <label>CFG Strength: {cfgStrength.toFixed(2)}</label>
                 <input
@@ -840,6 +896,38 @@ export default function App() {
                 <div className="metric-card">
                   <div className="metric-label">RTF</div>
                   <div className="metric-value">{metrics.rtf.toFixed(2)}</div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {referenceDiagnostics && (
+            <div className="glass-panel panel-flex gap-sm">
+              <div className="section-title">Reference diagnostics</div>
+              <div className="metrics-grid">
+                <div className="metric-card">
+                  <div className="metric-label">Ref raw</div>
+                  <div className="metric-value">{formatDiagnosticSeconds(referenceDiagnostics.reference_raw_duration_seconds)}</div>
+                </div>
+                <div className="metric-card">
+                  <div className="metric-label">Ref processed</div>
+                  <div className="metric-value">{formatDiagnosticSeconds(referenceDiagnostics.reference_processed_duration_seconds)}</div>
+                </div>
+                <div className="metric-card">
+                  <div className="metric-label">Ref tokens</div>
+                  <div className="metric-value">{referenceDiagnostics.reference_token_count ?? "—"}</div>
+                </div>
+                <div className="metric-card">
+                  <div className="metric-label">Target tokens</div>
+                  <div className="metric-value">{referenceDiagnostics.target_token_count ?? "—"}</div>
+                </div>
+                <div className="metric-card">
+                  <div className="metric-label">Ref RMS</div>
+                  <div className="metric-value">{formatDiagnosticNumber(referenceDiagnostics.reference_processed_rms, 3)}</div>
+                </div>
+                <div className="metric-card">
+                  <div className="metric-label">Resample</div>
+                  <div className="metric-value">{referenceDiagnostics.reference_resample_method ?? "—"}</div>
                 </div>
               </div>
             </div>

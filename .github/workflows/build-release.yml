@@ -43,10 +43,21 @@ jobs:
         shell: bash
         run: |
           mkdir -p src-tauri/binaries
+          PYINSTALLER_ARGS=(
+            --clean
+            -y
+            --onefile
+            --distpath src-tauri/binaries
+            --collect-all onnxruntime
+            --collect-all tokenizers
+            --collect-all scipy
+            --collect-data huggingface_hub
+            --hidden-import scipy.signal
+          )
           if [ "${{ matrix.platform }}" = "windows-latest" ]; then
-            pyinstaller --clean -y --onefile --distpath src-tauri/binaries --name sidecar-x86_64-pc-windows-msvc src-python/sidecar.py
+            pyinstaller "${PYINSTALLER_ARGS[@]}" --name sidecar-x86_64-pc-windows-msvc src-python/sidecar.py
           else
-            pyinstaller --clean -y --onefile --distpath src-tauri/binaries --name sidecar-aarch64-apple-darwin src-python/sidecar.py
+            pyinstaller "${PYINSTALLER_ARGS[@]}" --name sidecar-aarch64-apple-darwin src-python/sidecar.py
           fi
 
       - name: setup node

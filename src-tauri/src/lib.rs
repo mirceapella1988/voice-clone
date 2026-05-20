@@ -30,6 +30,15 @@ fn is_usable_sidecar_candidate(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+fn emit_sidecar_message(app_handle: &tauri::AppHandle, event_type: &str, message: &str) {
+    let payload = serde_json::json!({
+        "type": event_type,
+        "message": message,
+    })
+    .to_string();
+    let _ = app_handle.emit("sidecar-event", payload);
+}
+
 #[cfg(test)]
 mod tests {
     use super::{is_usable_sidecar_candidate, push_sidecar_candidate};
@@ -182,15 +191,33 @@ pub fn run() {
             };
             let sidecar_dir = sidecar_path.parent().map(|path| path.to_path_buf());
             let is_script = sidecar_path.extension().map_or(false, |ext| ext == "py");
+            let resource_dir = app.path().resource_dir().ok();
+            let mut app_model_dir = app.path().app_data_dir().ok().map(|path| path.join("models"));
+            if let Some(dir) = app_model_dir.clone() {
+                if let Err(e) = std::fs::create_dir_all(dir) {
+                    let message = format!("Failed to create model cache directory: {e}");
+                    eprintln!("{message}");
+                    let _ = app.emit(
+                        "sidecar-event",
+                        serde_json::json!({"type":"error","message":message}).to_string(),
+                    );
+                    app_model_dir = None;
+                }
+            }
 
             let child_process = if !is_script {
                 // Chạy trực tiếp binary sidecar đóng gói
                 let mut cmd = Command::new(&sidecar_path);
                 cmd.stdin(Stdio::piped())
                     .stdout(Stdio::piped())
-                    .stderr(Stdio::inherit());
-                if let Ok(resource_dir) = app.path().resource_dir() {
+                    .stderr(Stdio::piped())
+                    .env("PYTHONUNBUFFERED", "1")
+                    .env("PYTHONIOENCODING", "utf-8");
+                if let Some(resource_dir) = &resource_dir {
                     cmd.env("APP_RESOURCES_DIR", resource_dir);
+                }
+                if let Some(model_dir) = &app_model_dir {
+                    cmd.env("APP_MODEL_DIR", model_dir);
                 }
                 if let Some(dir) = &sidecar_dir {
                     cmd.current_dir(dir);
@@ -203,7 +230,15 @@ pub fn run() {
                     .arg(&sidecar_path)
                     .stdin(Stdio::piped())
                     .stdout(Stdio::piped())
-                    .stderr(Stdio::inherit());
+                    .stderr(Stdio::piped())
+                    .env("PYTHONUNBUFFERED", "1")
+                    .env("PYTHONIOENCODING", "utf-8");
+                if let Some(resource_dir) = &resource_dir {
+                    python3.env("APP_RESOURCES_DIR", resource_dir);
+                }
+                if let Some(model_dir) = &app_model_dir {
+                    python3.env("APP_MODEL_DIR", model_dir);
+                }
                 if let Some(dir) = &sidecar_dir {
                     python3.current_dir(dir);
                 }
@@ -215,7 +250,15 @@ pub fn run() {
                         .arg(&sidecar_path)
                         .stdin(Stdio::piped())
                         .stdout(Stdio::piped())
-                        .stderr(Stdio::inherit());
+                        .stderr(Stdio::piped())
+                        .env("PYTHONUNBUFFERED", "1")
+                        .env("PYTHONIOENCODING", "utf-8");
+                    if let Some(resource_dir) = &resource_dir {
+                        python.env("APP_RESOURCES_DIR", resource_dir);
+                    }
+                    if let Some(model_dir) = &app_model_dir {
+                        python.env("APP_MODEL_DIR", model_dir);
+                    }
                     if let Some(dir) = &sidecar_dir {
                         python.current_dir(dir);
                     }
@@ -229,6 +272,7 @@ pub fn run() {
                 Ok(mut child) => {
                     let stdin = child.stdin.take().unwrap();
                     let stdout = child.stdout.take().unwrap();
+                    let stderr = child.stderr.take();
 
                     // Lưu child và stdin vào state
                     let state = app.state::<SidecarState>();
@@ -247,9 +291,27 @@ pub fn run() {
                             }
                         }
                     });
+
+                    if let Some(stderr) = stderr {
+                        let app_handle = app.handle().clone();
+                        std::thread::spawn(move || {
+                            use std::io::{BufRead, BufReader};
+                            let reader = BufReader::new(stderr);
+                            for line in reader.lines() {
+                                if let Ok(l) = line {
+                                    emit_sidecar_message(&app_handle, "stderr", &l);
+                                }
+                            }
+                        });
+                    }
                 }
                 Err(e) => {
-                    eprintln!("Failed to start Python sidecar: {}", e);
+                    let message = format!("Failed to start Python sidecar: {e}");
+                    eprintln!("{message}");
+                    let _ = app.emit(
+                        "sidecar-event",
+                        serde_json::json!({"type":"error","message":message}).to_string(),
+                    );
                 }
             }
 

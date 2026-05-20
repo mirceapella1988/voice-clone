@@ -35,37 +35,58 @@ class SidecarApp:
     def cancel_flag(self):
         return self.cancel_event.is_set()
 
+    def decode_reference_audio(self, ref_audio, params):
+        ref_audio_np = None
+        ref_sample_rate = params.get("ref_sample_rate")
+        metadata = {}
+
+        if ref_audio is None:
+            return ref_audio_np, ref_sample_rate, metadata
+
+        if isinstance(ref_audio, str):
+            audio_bytes = base64.b64decode(ref_audio)
+            with wave.open(io.BytesIO(audio_bytes), 'rb') as wav:
+                params_wav = wav.getparams()
+                ref_sample_rate = params_wav.framerate
+                frames = wav.readframes(params_wav.nframes)
+                metadata = {
+                    "input_source": "base64_wav",
+                    "input_wav_sample_rate": params_wav.framerate,
+                    "input_wav_channels": params_wav.nchannels,
+                    "input_wav_sample_width": params_wav.sampwidth,
+                    "input_wav_frames": params_wav.nframes,
+                }
+                # Chuyển đổi sang float32 mono
+                if params_wav.sampwidth == 2:
+                    ref_audio_np = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+                elif params_wav.sampwidth == 1:
+                    ref_audio_np = (np.frombuffer(frames, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
+                else:
+                    raise ValueError("Unsupported wav sample width")
+
+                if params_wav.nchannels > 1:
+                    # Trộn sang mono
+                    ref_audio_np = ref_audio_np.reshape(-1, params_wav.nchannels).mean(axis=1)
+        elif isinstance(ref_audio, list):
+            ref_audio_np = np.array(ref_audio, dtype=np.float32)
+            metadata = {
+                "input_source": "float_list",
+                "input_samples": len(ref_audio_np),
+            }
+        else:
+            raise ValueError("Unsupported reference audio payload type")
+
+        return ref_audio_np, ref_sample_rate, metadata
+
     def run_inference(self, text, ref_audio, ref_text, instruct, params):
         self.is_generating = True
         self.cancel_event.clear()
         params = params or {}
+        diagnostics = {}
         
         start_time = time.time()
         try:
-            # Giải mã ref_audio nếu có
-            ref_audio_np = None
-            ref_sample_rate = params.get("ref_sample_rate")
-            if ref_audio is not None:
-                if isinstance(ref_audio, str):
-                    # Giả định ref_audio là base64 WAV
-                    audio_bytes = base64.b64decode(ref_audio)
-                    with wave.open(io.BytesIO(audio_bytes), 'rb') as wav:
-                        params_wav = wav.getparams()
-                        ref_sample_rate = params_wav.framerate
-                        frames = wav.readframes(params_wav.nframes)
-                        # Chuyển đổi sang float32 mono
-                        if params_wav.sampwidth == 2:
-                            ref_audio_np = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
-                        elif params_wav.sampwidth == 1:
-                            ref_audio_np = (np.frombuffer(frames, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
-                        else:
-                            raise ValueError("Unsupported wav sample width")
-                        
-                        if params_wav.nchannels > 1:
-                            # Trộn sang mono
-                            ref_audio_np = ref_audio_np.reshape(-1, params_wav.nchannels).mean(axis=1)
-                elif isinstance(ref_audio, list):
-                    ref_audio_np = np.array(ref_audio, dtype=np.float32)
+            ref_audio_np, ref_sample_rate, diagnostics = self.decode_reference_audio(ref_audio, params)
 
             audio, sample_rate = self.runtime.generate(
                 text=text,
@@ -97,6 +118,7 @@ class SidecarApp:
             # Tính toán tokens/s ước lượng
             tokens_generated = len(audio) / (sample_rate / 25.0) # Frame rate = 25
             tokens_per_sec = tokens_generated / elapsed if elapsed > 0 else 0
+            diagnostics = {**diagnostics, **getattr(self.runtime, "last_diagnostics", {})}
 
             send_json({
                 "type": "complete",
@@ -107,7 +129,8 @@ class SidecarApp:
                     "durationSeconds": duration_sec,
                     "rtf": rtf,
                     "tokensPerSec": tokens_per_sec
-                }
+                },
+                "diagnostics": diagnostics
             })
 
         except InterruptedError:
@@ -117,9 +140,11 @@ class SidecarApp:
             })
         except Exception as e:
             traceback.print_exc()
+            diagnostics = {**diagnostics, **getattr(self.runtime, "last_diagnostics", {})}
             send_json({
                 "type": "error",
-                "message": str(e)
+                "message": str(e),
+                "diagnostics": diagnostics
             })
         finally:
             self.is_generating = False

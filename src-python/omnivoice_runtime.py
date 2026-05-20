@@ -2,6 +2,7 @@ import os
 import re
 import json
 import time
+import math
 import numpy as np
 import onnxruntime as ort
 from huggingface_hub import hf_hub_download
@@ -105,12 +106,16 @@ def make_zero_kv(num_layers, num_heads, seq_len, head_dim, batch_size=1):
     return keys, values
 
 
+def _log_softmax(values):
+    stable = values - np.max(values)
+    return stable - np.log(np.sum(np.exp(stable)))
+
+
 def compute_scores(cond_logits, uncond_logits, masked, guidance_scale, num_cb, T, vocab_size, mask_id):
     total = num_cb * T
     pred_tokens = np.zeros(total, dtype=np.int32)
     scores = np.full(total, -np.inf, dtype=np.float32)
     use_cfg = uncond_logits is not None and guidance_scale > 0
-    s_plus_1 = 1.0 + guidance_scale
 
     for flat in range(total):
         if not masked[flat]:
@@ -118,24 +123,20 @@ def compute_scores(cond_logits, uncond_logits, masked, guidance_scale, num_cb, T
         cb = flat // T
         t = flat % T
 
-        c_l = cond_logits[cb, t, :]
+        c_l = _log_softmax(cond_logits[cb, t, :].astype(np.float32))
         if use_cfg:
-            u_l = uncond_logits[cb, t, :]
-            r = s_plus_1 * c_l - guidance_scale * u_l
+            u_l = _log_softmax(uncond_logits[cb, t, :].astype(np.float32))
+            r = _log_softmax(c_l + guidance_scale * (c_l - u_l))
         else:
             r = c_l
 
-        r_ex = r.copy()
-        r_ex[mask_id] = -np.inf
-        best_tok = np.argmax(r_ex)
-
-        stab = np.max(r)
-        exp_r = np.exp(r - stab)
-        sum_exp = np.sum(exp_r)
-        log_p = r[best_tok] - stab - np.log(sum_exp)
+        if 0 <= mask_id < vocab_size:
+            r = r.copy()
+            r[mask_id] = -np.inf
+        best_tok = np.argmax(r)
 
         pred_tokens[flat] = best_tok
-        scores[flat] = log_p - cb * LAYER_PEN
+        scores[flat] = r[best_tok] - cb * LAYER_PEN
 
     inv_pos_temp = 1.0 / POS_TEMP
     for flat in range(total):
@@ -243,10 +244,15 @@ def compute_rms(audio):
     return np.sqrt(np.mean(audio ** 2))
 
 
-def resample_audio_mono(audio, source_sample_rate, target_sample_rate):
+def to_mono_audio(audio):
     audio = np.asarray(audio, dtype=np.float32)
     if audio.ndim > 1:
         audio = np.mean(audio, axis=0 if audio.shape[0] <= audio.shape[-1] else 1)
+    return audio.astype(np.float32, copy=False)
+
+
+def resample_audio_mono(audio, source_sample_rate, target_sample_rate):
+    audio = to_mono_audio(audio)
 
     if len(audio) == 0:
         return audio
@@ -259,13 +265,18 @@ def resample_audio_mono(audio, source_sample_rate, target_sample_rate):
     if source_sample_rate == target_sample_rate:
         return audio.astype(np.float32, copy=False)
 
-    target_len = max(1, int(round(len(audio) * target_sample_rate / source_sample_rate)))
-    if len(audio) == 1:
-        return np.full(target_len, audio[0], dtype=np.float32)
+    try:
+        from scipy.signal import resample_poly
+    except ImportError as exc:
+        raise RuntimeError(
+            "scipy is required for high-quality OmniVoice reference audio resampling. "
+            "Install src-python/requirements.txt before running inference."
+        ) from exc
 
-    source_positions = np.arange(len(audio), dtype=np.float64)
-    target_positions = np.linspace(0, len(audio) - 1, target_len, dtype=np.float64)
-    return np.interp(target_positions, source_positions, audio).astype(np.float32)
+    gcd = math.gcd(source_sample_rate, target_sample_rate)
+    up = target_sample_rate // gcd
+    down = source_sample_rate // gcd
+    return resample_poly(audio, up, down).astype(np.float32)
 
 
 def db_to_amplitude(db):
@@ -514,6 +525,7 @@ class OmniVoiceRuntime:
         self.sessions = {}
         self.static_tensor_cache = {}
         self.device = "auto"
+        self.last_diagnostics = {}
 
     def emit(self, status, pct):
         if self.progress_callback:
@@ -542,27 +554,35 @@ class OmniVoiceRuntime:
 
     def _get_model_file(self, filename):
         resources_dir = os.environ.get("APP_RESOURCES_DIR")
+        app_model_dir = os.environ.get("APP_MODEL_DIR")
+        module_model_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+
+        candidate_dirs = []
+        if app_model_dir:
+            candidate_dirs.append(app_model_dir)
         if resources_dir:
-            local_dir = os.path.join(resources_dir, "src-python", "models")
-        else:
-            local_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
-        # Thử tải từ local cache trước (Offline mode)
-        try:
-            return hf_hub_download(
-                repo_id=MODEL_REPO,
-                filename=filename,
-                local_dir=local_dir,
-                local_files_only=True
-            )
-        except Exception:
-            # Nếu chưa có file cục bộ, kết nối internet tải về thư mục local_dir
-            self.emit(f"Downloading {filename} (Online)...", 25)
-            return hf_hub_download(
-                repo_id=MODEL_REPO,
-                filename=filename,
-                local_dir=local_dir,
-                local_files_only=False
-            )
+            candidate_dirs.append(os.path.join(resources_dir, "src-python", "models"))
+        candidate_dirs.append(module_model_dir)
+
+        seen_dirs = set()
+        for model_dir in candidate_dirs:
+            normalized_dir = os.path.abspath(model_dir)
+            if normalized_dir in seen_dirs:
+                continue
+            seen_dirs.add(normalized_dir)
+            direct_path = os.path.join(normalized_dir, filename)
+            if os.path.isfile(direct_path):
+                return direct_path
+
+        download_dir = app_model_dir or module_model_dir
+        os.makedirs(download_dir, exist_ok=True)
+        self.emit(f"Downloading {filename} (Online)...", 25)
+        return hf_hub_download(
+            repo_id=MODEL_REPO,
+            filename=filename,
+            local_dir=download_dir,
+            local_files_only=False
+        )
 
     def load(self, device="auto"):
         self.device = device
@@ -619,17 +639,41 @@ class OmniVoiceRuntime:
         language_id = params.get("language_id", None)
         ref_sample_rate = params.get("ref_sample_rate", self.config["sampling_rate"])
         speed = params.get("speed", 1.0)
+        if speed is None:
+            speed = 1.0
         duration = params.get("duration", None)
 
         lang = None if not language_id or language_id == "Auto" else language_id
+        self.last_diagnostics = {
+            "model_repo": MODEL_REPO,
+            "num_step": int(num_step),
+            "guidance_scale": float(guidance_scale),
+            "denoise": bool(denoise),
+            "preprocess_prompt": bool(preprocess_prompt),
+            "postprocess_output": bool(postprocess_output),
+            "language_id": lang,
+            "speed": float(speed),
+            "duration_override_seconds": duration,
+            "ref_text_chars": len((ref_text or "").strip()),
+            "instruct_chars": len((instruct or "").strip()),
+        }
 
         # 1. Preprocess prompt
-        processed_ref_audio = np.array(ref_audio, dtype=np.float32) if ref_audio is not None else None
+        processed_ref_audio = to_mono_audio(ref_audio) if ref_audio is not None else None
         processed_ref_text = (ref_text or "").strip()
         ref_rms = None
 
         if processed_ref_audio is not None:
             target_sample_rate = self.config["sampling_rate"]
+            raw_samples = len(processed_ref_audio)
+            raw_sample_rate = int(ref_sample_rate or target_sample_rate)
+            raw_duration = raw_samples / raw_sample_rate if raw_sample_rate > 0 else 0
+            self.last_diagnostics.update({
+                "reference_raw_samples": int(raw_samples),
+                "reference_raw_sample_rate": raw_sample_rate,
+                "reference_raw_duration_seconds": raw_duration,
+                "reference_raw_rms": float(compute_rms(processed_ref_audio)),
+            })
             if int(ref_sample_rate or target_sample_rate) != int(target_sample_rate):
                 self.emit(f"Resampling reference audio to {target_sample_rate} Hz...", 4)
                 processed_ref_audio = resample_audio_mono(
@@ -637,11 +681,17 @@ class OmniVoiceRuntime:
                     ref_sample_rate,
                     target_sample_rate,
                 )
+                self.last_diagnostics["reference_resample_method"] = "scipy.signal.resample_poly"
+            else:
+                self.last_diagnostics["reference_resample_method"] = "none"
 
             ref_rms = compute_rms(processed_ref_audio)
             if 0 < ref_rms < 0.1:
                 scale = 0.1 / ref_rms
                 processed_ref_audio *= scale
+                self.last_diagnostics["reference_rms_scale"] = float(scale)
+            else:
+                self.last_diagnostics["reference_rms_scale"] = 1.0
 
             if preprocess_prompt:
                 if not processed_ref_text:
@@ -654,6 +704,14 @@ class OmniVoiceRuntime:
             if preprocess_prompt and processed_ref_text:
                 processed_ref_text = add_punctuation(processed_ref_text)
 
+            self.last_diagnostics.update({
+                "reference_processed_samples": int(len(processed_ref_audio)),
+                "reference_processed_sample_rate": int(target_sample_rate),
+                "reference_processed_duration_seconds": len(processed_ref_audio) / target_sample_rate,
+                "reference_processed_rms": float(compute_rms(processed_ref_audio)),
+                "processed_ref_text_chars": len(processed_ref_text),
+            })
+
         # 2. Encode reference audio
         ref_codes = None
         if processed_ref_audio is not None:
@@ -662,10 +720,20 @@ class OmniVoiceRuntime:
             self.emit("Encoding reference audio...", 5)
             self.load_encoder()
             ref_codes = self._encode_audio(processed_ref_audio)
+            self.last_diagnostics.update({
+                "reference_token_count": int(ref_codes.shape[1]),
+                "reference_codebooks": int(ref_codes.shape[0]),
+            })
 
         # 4. Generate tokens
         total_target = self._estimate_target_length(text, processed_ref_text, ref_codes, speed, duration)
         should_chunk = audio_chunk_duration > 0 and total_target > int(round(audio_chunk_threshold * self.config["frame_rate"]))
+        self.last_diagnostics.update({
+            "target_token_count": int(total_target),
+            "audio_chunk_duration": float(audio_chunk_duration),
+            "audio_chunk_threshold": float(audio_chunk_threshold),
+            "chunked": bool(should_chunk),
+        })
 
         if should_chunk:
             token_chunks = self._generate_chunked(
@@ -679,6 +747,7 @@ class OmniVoiceRuntime:
                 num_step, guidance_scale, denoise, speed, duration,
                 cancel_flag=cancel_flag
             )]
+        self.last_diagnostics["chunk_count"] = len(token_chunks)
 
         # 5. Decode audio
         if cancel_flag and cancel_flag():
