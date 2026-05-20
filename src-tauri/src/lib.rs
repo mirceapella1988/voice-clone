@@ -68,6 +68,7 @@ pub fn run() {
             
             let mut sidecar_candidates = Vec::new();
             if let Ok(resource_dir) = app.path().resource_dir() {
+                sidecar_candidates.push(resource_dir.join(&binary_name));
                 sidecar_candidates.push(resource_dir.join("binaries").join(&binary_name));
                 sidecar_candidates.push(resource_dir.join("src-python").join("sidecar.py"));
             }
