@@ -1,0 +1,82 @@
+[
+  {
+    "id": "binh_nam_bac",
+    "name": "Bình",
+    "gender": "nam",
+    "region": "miền Bắc",
+    "audio": "samples/binh_nam_bac.wav",
+    "text": "samples/binh_nam_bac.txt"
+  },
+  {
+    "id": "doan_nu_nam",
+    "name": "Đoan",
+    "gender": "nữ",
+    "region": "miền Nam",
+    "audio": "samples/doan_nu_nam.wav",
+    "text": "samples/doan_nu_nam.txt"
+  },
+  {
+    "id": "dung_nu_nam",
+    "name": "Dung",
+    "gender": "nữ",
+    "region": "miền Nam",
+    "audio": "samples/dung_nu_nam.wav",
+    "text": "samples/dung_nu_nam.txt"
+  },
+  {
+    "id": "huong_nu_bac",
+    "name": "Hương",
+    "gender": "nữ",
+    "region": "miền Bắc",
+    "audio": "samples/huong_nu_bac.wav",
+    "text": "samples/huong_nu_bac.txt"
+  },
+  {
+    "id": "ly_nu_bac",
+    "name": "Ly",
+    "gender": "nữ",
+    "region": "miền Bắc",
+    "audio": "samples/ly_nu_bac.wav",
+    "text": "samples/ly_nu_bac.txt"
+  },
+  {
+    "id": "ngoc_nu_bac",
+    "name": "Ngọc",
+    "gender": "nữ",
+    "region": "miền Bắc",
+    "audio": "samples/ngoc_nu_bac.wav",
+    "text": "samples/ngoc_nu_bac.txt"
+  },
+  {
+    "id": "nguyen_nam_nam",
+    "name": "Nguyên",
+    "gender": "nam",
+    "region": "miền Nam",
+    "audio": "samples/nguyen_nam_nam.wav",
+    "text": "samples/nguyen_nam_nam.txt"
+  },
+  {
+    "id": "son_nam_nam",
+    "name": "Sơn",
+    "gender": "nam",
+    "region": "miền Nam",
+    "audio": "samples/son_nam_nam.wav",
+    "text": "samples/son_nam_nam.txt"
+  },
+  {
+    "id": "tuyen_nam_bac",
+    "name": "Tuyên",
+    "gender": "nam",
+    "region": "miền Bắc",
+    "audio": "samples/tuyen_nam_bac.wav",
+    "text": "samples/tuyen_nam_bac.txt"
+  },
+  {
+    "id": "vinh_nam_nam",
+    "name": "Vĩnh",
+    "gender": "nam",
+    "region": "miền Nam",
+    "audio": "samples/vinh_nam_nam.wav",
+    "text": "samples/vinh_nam_nam.txt"
+  }
+]

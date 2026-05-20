@@ -1,0 +1,88 @@
+name: "Build & Release"
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: "macos-latest" # macos-latest is x86_64/arm64
+            args: "--target universal-apple-darwin"
+          - platform: "windows-latest"
+            args: ""
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install huggingface_hub
+        run: pip install huggingface_hub
+
+      - name: Download models from Hugging Face
+        run: |
+          python -c "
+          import os
+          from huggingface_hub import hf_hub_download
+          MODEL_REPO = 'zxczx221312/OmniVoice-WebGPU-ONNX'
+          files = [
+              'omnivoice-config.json',
+              'tokenizer.json',
+              'omnivoice-decoder-webgpu.onnx',
+              'omnivoice-encoder-fixed.onnx',
+              'omnivoice-main-kv-fp16-b1.onnx',
+              'omnivoice-main-kv-fp16-b1.onnx_data'
+          ]
+          local_dir = 'src-python/models'
+          os.makedirs(local_dir, exist_ok=True)
+          for f in files:
+              print(f'Downloading {f}...')
+              hf_hub_download(repo_id=MODEL_REPO, filename=f, local_dir=local_dir, local_files_only=False)
+          "
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # Those targets are only needed on macOS for universal binary
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: install dependencies (ubuntu only)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: install frontend dependencies
+        run: npm install
+
+      - name: Build and release Tauri App
+        uses: tauri-apps/tauri-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Voice Clone v__VERSION__"
+          releaseBody: "Bản phát hành tự động cho Voice Clone."
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
