@@ -37,7 +37,7 @@ jobs:
           pip install -r src-python/requirements.txt
           if [ "${{ matrix.platform }}" = "windows-latest" ]; then
             pip uninstall -y onnxruntime
-            pip install onnxruntime-gpu
+            pip install onnxruntime-gpu nvidia-cuda-runtime-cu12 nvidia-cublas-cu12 nvidia-cufft-cu12 nvidia-cudnn-cu12
           fi
           pip install pyinstaller
           python - <<'PY'
@@ -62,9 +62,32 @@ jobs:
             --collect-all tokenizers
             --collect-all scipy
             --collect-data huggingface_hub
+            --collect-all hf_xet
             --hidden-import scipy.signal
           )
           if [ "${{ matrix.platform }}" = "windows-latest" ]; then
+            while IFS= read -r dll; do
+              PYINSTALLER_ARGS+=(--add-binary "$dll;onnxruntime/capi")
+            done < <(python - <<'PY'
+          import site
+          from pathlib import Path
+
+          roots = [
+              Path(base) / package / "bin"
+              for base in site.getsitepackages()
+              for package in (
+                  "nvidia/cuda_runtime",
+                  "nvidia/cublas",
+                  "nvidia/cufft",
+                  "nvidia/cudnn",
+              )
+          ]
+          for root in roots:
+              if root.is_dir():
+                  for dll in sorted(root.glob("*.dll")):
+                      print(dll)
+          PY
+            )
             pyinstaller "${PYINSTALLER_ARGS[@]}" --name sidecar-x86_64-pc-windows-msvc src-python/sidecar.py
           else
             pyinstaller "${PYINSTALLER_ARGS[@]}" --name sidecar-aarch64-apple-darwin src-python/sidecar.py
@@ -165,7 +188,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Voice Clone v__VERSION__"
-          releaseBody: "Bản phát hành tự động cho Voice Clone. Windows GPU build uses onnxruntime-gpu and downloads OmniVoice model files on first load to avoid MSI size limits. macOS public distribution requires Apple Developer ID signing and notarization; otherwise the draft build is ad-hoc signed for internal testing."
+          releaseBody: "Bản phát hành tự động cho Voice Clone. Windows GPU build bundles ONNX Runtime CUDA dependencies and downloads OmniVoice model files on first load to avoid MSI size limits. macOS public distribution requires Apple Developer ID signing and notarization; otherwise the draft build is ad-hoc signed for internal testing."
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}

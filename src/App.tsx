@@ -118,7 +118,8 @@ export default function App() {
   const audioContextRef = useRef<AudioContext | null>(null);
 
   const appendLog = (msg: string) => {
-    setLogs((prev) => [...prev.slice(-100), `[${new Date().toLocaleTimeString()}] ${msg}`]);
+    const cleanMessage = msg.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "").trim();
+    setLogs((prev) => [...prev.slice(-100), `[${new Date().toLocaleTimeString()}] ${cleanMessage}`]);
   };
 
   // Convert Base64 to Float32Array (For result audio)
