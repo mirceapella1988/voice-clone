@@ -19,8 +19,13 @@ jobs:
         include:
           - platform: "macos-latest"
             args: "--target aarch64-apple-darwin"
+            windowsCuda: false
           - platform: "windows-latest"
             args: "--bundles nsis"
+            windowsCuda: false
+          - platform: "windows-latest"
+            args: "--bundles nsis"
+            windowsCuda: true
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -35,7 +40,7 @@ jobs:
         shell: bash
         run: |
           pip install -r src-python/requirements.txt
-          if [ "${{ matrix.platform }}" = "windows-latest" ]; then
+          if [ "${{ matrix.windowsCuda }}" = "true" ]; then
             pip uninstall -y onnxruntime
             pip install onnxruntime-gpu nvidia-cuda-runtime-cu12 nvidia-cublas-cu12 nvidia-cufft-cu12 nvidia-cudnn-cu12
           fi
@@ -60,7 +65,7 @@ jobs:
             --collect-data huggingface_hub
             --collect-all hf_xet
           )
-          if [ "${{ matrix.platform }}" = "windows-latest" ]; then
+          if [ "${{ matrix.windowsCuda }}" = "true" ]; then
             while IFS= read -r dll; do
               dll="${dll//$'\r'/}"
               if [ -z "$dll" ]; then
@@ -111,6 +116,8 @@ jobs:
           PY
             )
             pyinstaller "${PYINSTALLER_ARGS[@]}" --name sidecar-x86_64-pc-windows-msvc src-python/sidecar.py
+          elif [ "${{ matrix.platform }}" = "windows-latest" ]; then
+            pyinstaller "${PYINSTALLER_ARGS[@]}" --name sidecar-x86_64-pc-windows-msvc src-python/sidecar.py
           else
             pyinstaller "${PYINSTALLER_ARGS[@]}" --name sidecar-aarch64-apple-darwin src-python/sidecar.py
           fi
@@ -143,6 +150,18 @@ jobs:
 
       - name: install frontend dependencies
         run: npm install
+
+      - name: Rename Windows CUDA bundle
+        if: matrix.windowsCuda == true
+        shell: bash
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const configPath = 'src-tauri/tauri.conf.json';
+          const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+          config.productName = 'Voice Clone CUDA';
+          fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+          NODE
 
       - name: Configure macOS signing
         if: matrix.platform == 'macos-latest'
@@ -202,7 +221,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Voice Clone v__VERSION__"
-          releaseBody: "Bản phát hành tự động cho Voice Clone. App downloads OmniVoice model files from Hugging Face on first load and caches them locally instead of bundling model files in the installer. Windows build bundles ONNX Runtime GPU plus CUDA/cuDNN runtime DLLs so CUDA can be selected on supported NVIDIA systems. macOS public distribution requires Apple Developer ID signing and notarization; otherwise the draft build is ad-hoc signed for internal testing."
+          releaseBody: "Bản phát hành tự động cho Voice Clone. App downloads OmniVoice model files from Hugging Face on first load and caches them locally instead of bundling model files in the installer. Windows publishes a small CPU installer and a larger CUDA installer; use the CUDA build only on supported NVIDIA systems. macOS public distribution requires Apple Developer ID signing and notarization; otherwise the draft build is ad-hoc signed for internal testing."
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
