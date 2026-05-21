@@ -39,6 +39,17 @@ fn emit_sidecar_message(app_handle: &tauri::AppHandle, event_type: &str, message
     let _ = app_handle.emit("sidecar-event", payload);
 }
 
+#[cfg(target_os = "windows")]
+fn hide_subprocess_window(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(target_os = "windows"))]
+fn hide_subprocess_window(_command: &mut Command) {}
+
 #[cfg(test)]
 mod tests {
     use super::{is_usable_sidecar_candidate, push_sidecar_candidate};
@@ -222,6 +233,7 @@ pub fn run() {
                 if let Some(dir) = &sidecar_dir {
                     cmd.current_dir(dir);
                 }
+                hide_subprocess_window(&mut cmd);
                 cmd.spawn()
             } else {
                 // Chạy script python (chế độ dev)
@@ -242,6 +254,7 @@ pub fn run() {
                 if let Some(dir) = &sidecar_dir {
                     python3.current_dir(dir);
                 }
+                hide_subprocess_window(&mut python3);
                 let spawn_res = python3.spawn();
 
                 if spawn_res.is_err() {
@@ -262,6 +275,7 @@ pub fn run() {
                     if let Some(dir) = &sidecar_dir {
                         python.current_dir(dir);
                     }
+                    hide_subprocess_window(&mut python);
                     python.spawn()
                 } else {
                     spawn_res

@@ -32,9 +32,18 @@ jobs:
           python-version: '3.10'
 
       - name: Install Python dependencies & PyInstaller
+        shell: bash
         run: |
           pip install -r src-python/requirements.txt
+          if [ "${{ matrix.platform }}" = "windows-latest" ]; then
+            pip uninstall -y onnxruntime
+            pip install onnxruntime-gpu
+          fi
           pip install pyinstaller
+          python - <<'PY'
+          import onnxruntime as ort
+          print("ONNX Runtime providers:", ort.get_available_providers())
+          PY
 
       - name: Download models from Hugging Face
         run: python src-python/download_models.py
