@@ -3,4 +3,3 @@ onnxruntime
 tokenizers
 huggingface_hub
 hf_xet
-scipy

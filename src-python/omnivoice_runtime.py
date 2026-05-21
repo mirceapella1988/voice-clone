@@ -2,7 +2,6 @@ import os
 import re
 import json
 import time
-import math
 import numpy as np
 import onnxruntime as ort
 from huggingface_hub import hf_hub_download
@@ -265,18 +264,19 @@ def resample_audio_mono(audio, source_sample_rate, target_sample_rate):
     if source_sample_rate == target_sample_rate:
         return audio.astype(np.float32, copy=False)
 
-    try:
-        from scipy.signal import resample_poly
-    except ImportError as exc:
-        raise RuntimeError(
-            "scipy is required for high-quality OmniVoice reference audio resampling. "
-            "Install src-python/requirements.txt before running inference."
-        ) from exc
+    # Keep resampling dependency-light for PyInstaller onefile builds. Importing
+    # SciPy from a bundled Windows sidecar can be very slow and can look like a
+    # hung generation right after the "Resampling reference audio..." progress.
+    target_len = max(1, int(round(len(audio) * target_sample_rate / source_sample_rate)))
+    if source_sample_rate == target_sample_rate * 2 and len(audio) >= 2:
+        even_len = len(audio) - (len(audio) % 2)
+        downsampled = audio[:even_len].reshape(-1, 2).mean(axis=1)
+        if len(downsampled) == target_len:
+            return downsampled.astype(np.float32, copy=False)
 
-    gcd = math.gcd(source_sample_rate, target_sample_rate)
-    up = target_sample_rate // gcd
-    down = source_sample_rate // gcd
-    return resample_poly(audio, up, down).astype(np.float32)
+    source_x = np.linspace(0.0, 1.0, num=len(audio), endpoint=False, dtype=np.float64)
+    target_x = np.linspace(0.0, 1.0, num=target_len, endpoint=False, dtype=np.float64)
+    return np.interp(target_x, source_x, audio).astype(np.float32)
 
 
 def db_to_amplitude(db):
@@ -701,10 +701,11 @@ class OmniVoiceRuntime:
                     ref_sample_rate,
                     target_sample_rate,
                 )
-                self.last_diagnostics["reference_resample_method"] = "scipy.signal.resample_poly"
+                self.last_diagnostics["reference_resample_method"] = "numpy"
             else:
                 self.last_diagnostics["reference_resample_method"] = "none"
 
+            self.emit("Preparing reference audio...", 4)
             ref_rms = compute_rms(processed_ref_audio)
             if 0 < ref_rms < 0.1:
                 scale = 0.1 / ref_rms
@@ -715,7 +716,9 @@ class OmniVoiceRuntime:
 
             if preprocess_prompt:
                 if not processed_ref_text:
+                    self.emit("Trimming reference audio...", 4)
                     processed_ref_audio = trim_long_audio_mono(processed_ref_audio, self.config["sampling_rate"])
+                self.emit("Removing reference silence...", 4)
                 processed_ref_audio = remove_silence_mono(processed_ref_audio, self.config["sampling_rate"], 200, 100, 200)
 
                 if len(processed_ref_audio) == 0:

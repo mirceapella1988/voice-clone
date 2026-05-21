@@ -57,10 +57,8 @@ jobs:
             --distpath src-tauri/binaries
             --collect-all onnxruntime
             --collect-all tokenizers
-            --collect-all scipy
             --collect-data huggingface_hub
             --collect-all hf_xet
-            --hidden-import scipy.signal
           )
           if [ "${{ matrix.platform }}" = "windows-latest" ]; then
             while IFS= read -r dll; do

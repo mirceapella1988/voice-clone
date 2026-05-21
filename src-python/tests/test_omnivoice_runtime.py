@@ -83,7 +83,7 @@ class AudioResampleTests(unittest.TestCase):
         )
 
         self.assertEqual(captured["encoded_len"], 24000)
-        self.assertEqual(runtime.last_diagnostics["reference_resample_method"], "scipy.signal.resample_poly")
+        self.assertEqual(runtime.last_diagnostics["reference_resample_method"], "numpy")
         self.assertEqual(runtime.last_diagnostics["reference_token_count"], 25)
         self.assertGreater(runtime.last_diagnostics["target_token_count"], 0)
         self.assertEqual(runtime.last_diagnostics["chunk_count"], 1)
