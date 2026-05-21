@@ -4,6 +4,8 @@ import json
 import os
 import sys
 import tempfile
+import threading
+import time
 import unittest
 import wave
 from pathlib import Path
@@ -18,8 +20,10 @@ import omnivoice_runtime
 from omnivoice_runtime import (
     MODEL_REPO,
     OmniVoiceRuntime,
+    OmniVoiceValidationError,
     default_model_cache_dir,
     get_available_hardware_devices,
+    normalize_instruct,
     normalize_language_id,
     to_mono_audio,
 )
@@ -190,23 +194,28 @@ class RuntimeGenerateTests(unittest.TestCase):
     def test_generate_matches_space_voice_clone_prompt_flow(self):
         runtime = self.make_loaded_runtime()
 
-        audio, sample_rate = runtime.generate(
-            text="Xin chao",
-            ref_audio=np.zeros(48000, dtype=np.float32),
-            ref_text="Reference text",
-            instruct="warm voice",
-            params={
-                "ref_sample_rate": 48000,
-                "language_id": "vi",
-                "num_step": 24,
-                "guidance_scale": 1.5,
-                "speed": 1.2,
-                "duration": None,
-                "denoise": True,
-                "preprocess_prompt": True,
-                "postprocess_output": False,
-            },
-        )
+        with patch.object(
+            omnivoice_runtime,
+            "_load_omnivoice_instruct_resolver",
+            return_value=lambda instruct, use_zh=False: "male, whisper",
+        ):
+            audio, sample_rate = runtime.generate(
+                text="Xin chao",
+                ref_audio=np.zeros(48000, dtype=np.float32),
+                ref_text="Reference text",
+                instruct="Male, whisper",
+                params={
+                    "ref_sample_rate": 48000,
+                    "language_id": "vi",
+                    "num_step": 24,
+                    "guidance_scale": 1.5,
+                    "speed": 1.2,
+                    "duration": None,
+                    "denoise": True,
+                    "preprocess_prompt": True,
+                    "postprocess_output": False,
+                },
+            )
 
         self.assertEqual(sample_rate, 24000)
         np.testing.assert_allclose(audio, np.array([0.0, 0.25, -0.25], dtype=np.float32))
@@ -223,7 +232,7 @@ class RuntimeGenerateTests(unittest.TestCase):
         self.assertEqual(generate_kwargs["text"], "Xin chao")
         self.assertEqual(generate_kwargs["language"], "vi")
         self.assertEqual(generate_kwargs["voice_clone_prompt"], runtime.model.prompt)
-        self.assertEqual(generate_kwargs["instruct"], "warm voice")
+        self.assertEqual(generate_kwargs["instruct"], "male, whisper")
         self.assertEqual(generate_kwargs["speed"], 1.2)
         self.assertNotIn("duration", generate_kwargs)
 
@@ -265,6 +274,24 @@ class RuntimeGenerateTests(unittest.TestCase):
         self.assertEqual(runtime.last_diagnostics["raw_language_id"], "Vietnamese (vi)")
         self.assertEqual(runtime.last_diagnostics["language_id"], "vi")
 
+    def test_generate_rejects_upstream_instruct_validation_before_model_generate(self):
+        runtime = self.make_loaded_runtime()
+
+        def fake_resolver(instruct, use_zh=False):
+            raise ValueError("Unsupported instruct items found in male, lightly")
+
+        with patch.object(omnivoice_runtime, "_load_omnivoice_instruct_resolver", return_value=fake_resolver):
+            with self.assertRaises(OmniVoiceValidationError) as context:
+                runtime.generate(
+                    text="Xin chao",
+                    ref_audio=np.zeros(24000, dtype=np.float32),
+                    ref_text="hello",
+                    instruct="male, lightly",
+                )
+
+        self.assertIn("lightly", str(context.exception))
+        self.assertIsNone(runtime.model.generate_kwargs)
+
     def test_generate_respects_cancel_before_prompt_creation(self):
         runtime = self.make_loaded_runtime()
 
@@ -303,6 +330,43 @@ class LanguageNormalizationTests(unittest.TestCase):
         self.assertEqual(normalize_language_id("VI"), "vi")
         self.assertEqual(normalize_language_id("Vietnamese (vi)"), "vi")
         self.assertEqual(normalize_language_id("Vietnamese"), "Vietnamese")
+
+
+class InstructNormalizationTests(unittest.TestCase):
+    def test_normalizes_with_omnivoice_resolver(self):
+        calls = []
+
+        def fake_resolver(instruct, use_zh=False):
+            calls.append((instruct, use_zh))
+            return "male, low pitch"
+
+        self.assertEqual(
+            normalize_instruct("Male, low pitch", target_text="Xin chao", resolver=fake_resolver),
+            "male, low pitch",
+        )
+        self.assertEqual(calls, [("Male, low pitch", False)])
+
+    def test_uses_chinese_resolution_when_target_text_is_chinese(self):
+        calls = []
+
+        def fake_resolver(instruct, use_zh=False):
+            calls.append((instruct, use_zh))
+            return "男，低音调"
+
+        self.assertEqual(
+            normalize_instruct("male, low pitch", target_text="你好", resolver=fake_resolver),
+            "男，低音调",
+        )
+        self.assertEqual(calls, [("male, low pitch", True)])
+
+    def test_wraps_upstream_instruct_validation_errors(self):
+        def fake_resolver(instruct, use_zh=False):
+            raise ValueError("Unsupported instruct items found in male, lightly")
+
+        with self.assertRaises(OmniVoiceValidationError) as context:
+            normalize_instruct("male, lightly", resolver=fake_resolver)
+
+        self.assertIn("lightly", str(context.exception))
 
 
 class AudioHelperTests(unittest.TestCase):
@@ -379,6 +443,26 @@ class SidecarReferenceAudioTests(unittest.TestCase):
         payload = '{"command":"get_devices"}\n'
 
         self.assertEqual(read_next_command(io.BytesIO(payload.encode("utf-8"))), payload)
+
+    def test_progress_heartbeat_emits_elapsed_generation_status(self):
+        app = SidecarApp()
+        events = []
+        stop_event = threading.Event()
+        app.on_progress = lambda status, progress: events.append((status, progress))
+
+        thread = app.start_progress_heartbeat(
+            stop_event,
+            started_at=time.time() - 10,
+            interval=0.01,
+        )
+        time.sleep(0.03)
+        stop_event.set()
+        thread.join(timeout=1.0)
+
+        self.assertTrue(events)
+        self.assertTrue(events[0][0].startswith("Generating speech..."))
+        self.assertGreaterEqual(events[0][1], 0.25)
+        self.assertLessEqual(events[0][1], 0.95)
 
 
 if __name__ == "__main__":

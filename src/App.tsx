@@ -49,6 +49,14 @@ interface LanguageOption {
   label: string;
 }
 
+interface InstructOption {
+  value: string;
+  label: string;
+  group: string;
+  category: "gender" | "age" | "pitch" | "style" | "region";
+  aliases: string[];
+}
+
 const LANGUAGE_OPTIONS: LanguageOption[] = [
   { value: "Auto", label: "Auto" },
   { value: "vi", label: "Vietnamese (vi)" },
@@ -63,6 +71,49 @@ const LANGUAGE_OPTIONS: LanguageOption[] = [
   { value: "id", label: "Indonesian (id)" },
 ];
 
+const INSTRUCT_OPTIONS: InstructOption[] = [
+  { value: "male", label: "Nam", group: "Giới tính", category: "gender", aliases: ["male", "nam", "giong nam"] },
+  { value: "female", label: "Nữ", group: "Giới tính", category: "gender", aliases: ["female", "nu", "giong nu"] },
+  { value: "child", label: "Trẻ em", group: "Độ tuổi", category: "age", aliases: ["child", "tre em", "nhi dong"] },
+  { value: "teenager", label: "Thiếu niên", group: "Độ tuổi", category: "age", aliases: ["teenager", "thieu nien", "tuoi teen"] },
+  { value: "young adult", label: "Thanh niên", group: "Độ tuổi", category: "age", aliases: ["young adult", "thanh nien", "tre"] },
+  { value: "middle-aged", label: "Trung niên", group: "Độ tuổi", category: "age", aliases: ["middle-aged", "trung nien"] },
+  { value: "elderly", label: "Người lớn tuổi", group: "Độ tuổi", category: "age", aliases: ["elderly", "nguoi lon tuoi", "cao tuoi", "gia"] },
+  { value: "very low pitch", label: "Rất trầm", group: "Cao độ", category: "pitch", aliases: ["very low pitch", "rat tram", "cuc tram"] },
+  { value: "low pitch", label: "Trầm", group: "Cao độ", category: "pitch", aliases: ["low pitch", "tram", "giong tram"] },
+  { value: "moderate pitch", label: "Cao độ vừa", group: "Cao độ", category: "pitch", aliases: ["moderate pitch", "vua", "trung binh"] },
+  { value: "high pitch", label: "Cao", group: "Cao độ", category: "pitch", aliases: ["high pitch", "cao", "giong cao"] },
+  { value: "very high pitch", label: "Rất cao", group: "Cao độ", category: "pitch", aliases: ["very high pitch", "rat cao", "cuc cao"] },
+  { value: "whisper", label: "Thì thầm", group: "Phong cách", category: "style", aliases: ["whisper", "thi tham", "noi nho"] },
+  { value: "american accent", label: "Giọng Mỹ", group: "Vùng/giọng", category: "region", aliases: ["american accent", "my", "hoa ky"] },
+  { value: "australian accent", label: "Giọng Úc", group: "Vùng/giọng", category: "region", aliases: ["australian accent", "uc"] },
+  { value: "british accent", label: "Giọng Anh", group: "Vùng/giọng", category: "region", aliases: ["british accent", "anh", "anh quoc"] },
+  { value: "canadian accent", label: "Giọng Canada", group: "Vùng/giọng", category: "region", aliases: ["canadian accent", "canada"] },
+  { value: "chinese accent", label: "Giọng Trung khi nói tiếng Anh", group: "Vùng/giọng", category: "region", aliases: ["chinese accent", "trung quoc"] },
+  { value: "indian accent", label: "Giọng Ấn Độ", group: "Vùng/giọng", category: "region", aliases: ["indian accent", "an do"] },
+  { value: "japanese accent", label: "Giọng Nhật", group: "Vùng/giọng", category: "region", aliases: ["japanese accent", "nhat"] },
+  { value: "korean accent", label: "Giọng Hàn", group: "Vùng/giọng", category: "region", aliases: ["korean accent", "han quoc"] },
+  { value: "portuguese accent", label: "Giọng Bồ Đào Nha", group: "Vùng/giọng", category: "region", aliases: ["portuguese accent", "bo dao nha"] },
+  { value: "russian accent", label: "Giọng Nga", group: "Vùng/giọng", category: "region", aliases: ["russian accent", "nga"] },
+  { value: "东北话", label: "Tiếng Đông Bắc", group: "Vùng/giọng Trung", category: "region", aliases: ["dong bac", "dongbei"] },
+  { value: "云南话", label: "Tiếng Vân Nam", group: "Vùng/giọng Trung", category: "region", aliases: ["van nam", "yunnan"] },
+  { value: "四川话", label: "Tiếng Tứ Xuyên", group: "Vùng/giọng Trung", category: "region", aliases: ["tu xuyen", "sichuan"] },
+  { value: "宁夏话", label: "Tiếng Ninh Hạ", group: "Vùng/giọng Trung", category: "region", aliases: ["ninh ha", "ningxia"] },
+  { value: "桂林话", label: "Tiếng Quế Lâm", group: "Vùng/giọng Trung", category: "region", aliases: ["que lam", "guilin"] },
+  { value: "河南话", label: "Tiếng Hà Nam", group: "Vùng/giọng Trung", category: "region", aliases: ["ha nam", "henan"] },
+  { value: "济南话", label: "Tiếng Tế Nam", group: "Vùng/giọng Trung", category: "region", aliases: ["te nam", "jinan"] },
+  { value: "甘肃话", label: "Tiếng Cam Túc", group: "Vùng/giọng Trung", category: "region", aliases: ["cam tuc", "gansu"] },
+  { value: "石家庄话", label: "Tiếng Thạch Gia Trang", group: "Vùng/giọng Trung", category: "region", aliases: ["thach gia trang", "shijiazhuang"] },
+  { value: "贵州话", label: "Tiếng Quý Châu", group: "Vùng/giọng Trung", category: "region", aliases: ["quy chau", "guizhou"] },
+  { value: "陕西话", label: "Tiếng Thiểm Tây", group: "Vùng/giọng Trung", category: "region", aliases: ["thiem tay", "shaanxi"] },
+  { value: "青岛话", label: "Tiếng Thanh Đảo", group: "Vùng/giọng Trung", category: "region", aliases: ["thanh dao", "qingdao"] },
+];
+
+const INSTRUCT_OPTION_BY_VALUE = new Map(INSTRUCT_OPTIONS.map((option) => [option.value, option]));
+
+const normalizeSearchText = (value: string) =>
+  value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
 export default function App() {
   // Model state
   const [modelStatus, setModelStatus] = useState<"unloaded" | "loading" | "ready">("unloaded");
@@ -75,7 +126,9 @@ export default function App() {
 
   // Target speech input
   const [targetText, setTargetText] = useState("Chào bạn! Đây là bản thử nghiệm tính năng nhân bản giọng nói tiếng Việt chạy local trên máy tính.");
-  const [instructText, setInstructText] = useState("");
+  const [selectedInstructValues, setSelectedInstructValues] = useState<string[]>([]);
+  const [instructQuery, setInstructQuery] = useState("");
+  const [isInstructMenuOpen, setIsInstructMenuOpen] = useState(false);
   const [selectedLanguage, setSelectedLanguage] = useState("vi");
 
   // Tab state: "preset" | "custom"
@@ -342,10 +395,15 @@ export default function App() {
 
   // Listen to Tauri events from sidecar
   useEffect(() => {
+    let disposed = false;
     let unlisten: (() => void) | null = null;
+    let deviceTimer: number | null = null;
+    const presetsAbortController = new AbortController();
 
     const setupListener = async () => {
-      unlisten = await listen("sidecar-event", (event) => {
+      const cleanup = await listen("sidecar-event", (event) => {
+        if (disposed) return;
+
         try {
           const data = JSON.parse(event.payload as string);
           
@@ -416,13 +474,24 @@ export default function App() {
         }
       });
 
+      if (disposed) {
+        cleanup();
+        return;
+      }
+
+      unlisten = cleanup;
+
       // Query devices after 500ms
-      setTimeout(async () => {
+      deviceTimer = window.setTimeout(async () => {
+        if (disposed) return;
+
         try {
           await invoke("send_to_sidecar", {
             msg: JSON.stringify({ command: "get_devices" })
           });
         } catch (err: any) {
+          if (disposed) return;
+
           appendLog(`Failed to query devices: ${err.message || err}`);
           setDevices([{ id: "cpu", name: "CPU (Mặc định)" }]);
           setSelectedDevice("cpu");
@@ -434,17 +503,28 @@ export default function App() {
     setupListener();
 
     // Fetch presets manifest
-    fetch("samples/manifest.json")
+    fetch("samples/manifest.json", { signal: presetsAbortController.signal })
       .then((res) => res.json())
       .then((data) => {
+        if (disposed) return;
+
         setPresets(data);
         if (data.length > 0) {
           handlePresetSelect(data[0]);
         }
       })
-      .catch((err) => appendLog(`Failed to load presets: ${err.message}`));
+      .catch((err) => {
+        if (disposed || err.name === "AbortError") return;
+
+        appendLog(`Failed to load presets: ${err.message}`);
+      });
 
     return () => {
+      disposed = true;
+      presetsAbortController.abort();
+      if (deviceTimer !== null) {
+        window.clearTimeout(deviceTimer);
+      }
       if (unlisten) unlisten();
     };
   }, []);
@@ -510,6 +590,40 @@ export default function App() {
       appendLog(`Failed to communicate with sidecar: ${err.message || err}`);
       setModelStatus("unloaded");
     }
+  };
+
+  const selectedInstructOptions = selectedInstructValues
+    .map((value) => INSTRUCT_OPTION_BY_VALUE.get(value))
+    .filter((option): option is InstructOption => Boolean(option));
+  const selectedInstructSet = new Set(selectedInstructValues);
+  const selectedInstructCategories = new Set(selectedInstructOptions.map((option) => option.category));
+  const instructText = selectedInstructOptions.map((option) => option.value).join(", ");
+  const normalizedInstructQuery = normalizeSearchText(instructQuery.trim());
+  const filteredInstructOptions = INSTRUCT_OPTIONS.filter((option) => {
+    if (selectedInstructSet.has(option.value)) return false;
+    if (selectedInstructCategories.has(option.category)) return false;
+    if (!normalizedInstructQuery) return true;
+
+    const haystack = normalizeSearchText([
+      option.label,
+      option.value,
+      option.group,
+      ...option.aliases,
+    ].join(" "));
+    return haystack.includes(normalizedInstructQuery);
+  }).slice(0, 12);
+
+  const addInstructOption = (option: InstructOption) => {
+    setSelectedInstructValues((current) => [
+      ...current.filter((value) => INSTRUCT_OPTION_BY_VALUE.get(value)?.category !== option.category),
+      option.value,
+    ]);
+    setInstructQuery("");
+    setIsInstructMenuOpen(true);
+  };
+
+  const removeInstructOption = (value: string) => {
+    setSelectedInstructValues((current) => current.filter((item) => item !== value));
   };
 
   const handleGenerate = async () => {
@@ -791,16 +905,75 @@ export default function App() {
               />
             </div>
 
-             <div className="form-group">
+            <div className="form-group">
               <label>Chỉ dẫn giọng điệu / Thiết kế giọng (Instruct)</label>
-              <input
-                type="text"
-                value={instructText}
-                onChange={(e) => setInstructText(e.target.value)}
-                placeholder="Để trống để giữ nguyên giọng mẫu. Ví dụ: male, whisper, low pitch..."
-              />
+              <div
+                className="tag-select"
+                onBlur={() => window.setTimeout(() => setIsInstructMenuOpen(false), 120)}
+              >
+                <div className="tag-select-control" onClick={() => setIsInstructMenuOpen(true)}>
+                  {selectedInstructOptions.map((option) => (
+                    <span className="tag-chip" key={option.value}>
+                      <span>{option.label}</span>
+                      <small>{option.value}</small>
+                      <button
+                        type="button"
+                        aria-label={`Bỏ ${option.label}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          removeInstructOption(option.value);
+                        }}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                  <input
+                    type="text"
+                    value={instructQuery}
+                    onFocus={() => setIsInstructMenuOpen(true)}
+                    onChange={(e) => {
+                      setInstructQuery(e.target.value);
+                      setIsInstructMenuOpen(true);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && filteredInstructOptions.length > 0) {
+                        event.preventDefault();
+                        addInstructOption(filteredInstructOptions[0]);
+                      } else if (event.key === "Backspace" && !instructQuery && selectedInstructValues.length > 0) {
+                        removeInstructOption(selectedInstructValues[selectedInstructValues.length - 1]);
+                      } else if (event.key === "Escape") {
+                        setIsInstructMenuOpen(false);
+                      }
+                    }}
+                    placeholder={selectedInstructOptions.length === 0 ? "Chọn tag tiếng Việt..." : "Thêm tag..."}
+                  />
+                </div>
+                {isInstructMenuOpen && (
+                  <div className="tag-select-options" onMouseDown={(event) => event.preventDefault()}>
+                    {filteredInstructOptions.length > 0 ? (
+                      filteredInstructOptions.map((option) => (
+                        <button
+                          type="button"
+                          className="tag-select-option"
+                          key={option.value}
+                          onClick={() => addInstructOption(option)}
+                        >
+                          <span>
+                            <strong>{option.label}</strong>
+                            <small>{option.group}</small>
+                          </span>
+                          <code>{option.value}</code>
+                        </button>
+                      ))
+                    ) : (
+                      <div className="tag-select-empty">Không có tag OmniVoice hợp lệ phù hợp.</div>
+                    )}
+                  </div>
+                )}
+              </div>
               <span className="input-helper">
-                Để trống để clone thuần theo giọng mẫu. Instruct có thể thay đổi giới tính/cao độ/phong cách và làm giọng lệch khỏi reference audio.
+                Chỉ chọn tag hợp lệ. App hiển thị tiếng Việt nhưng gửi sang OmniVoice là: {instructText || "không có instruct"}.
               </span>
             </div>
 

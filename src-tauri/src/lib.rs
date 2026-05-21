@@ -202,6 +202,16 @@ pub fn run() {
             let runtime_binary_name = format!("sidecar{}", ext);
 
             let mut sidecar_candidates = Vec::new();
+            if cfg!(debug_assertions) {
+                if let Ok(current_dir) = std::env::current_dir() {
+                    if current_dir.ends_with("src-tauri") {
+                        if let Some(parent) = current_dir.parent() {
+                            push_sidecar_candidate(&mut sidecar_candidates, parent.join("src-python").join("sidecar.py"));
+                        }
+                    }
+                    push_sidecar_candidate(&mut sidecar_candidates, current_dir.join("src-python").join("sidecar.py"));
+                }
+            }
             if let Ok(current_exe) = std::env::current_exe() {
                 if let Some(exe_dir) = current_exe.parent() {
                     push_sidecar_candidate(&mut sidecar_candidates, exe_dir.join(&runtime_binary_name));
@@ -214,16 +224,6 @@ pub fn run() {
                 push_sidecar_candidate(&mut sidecar_candidates, resource_dir.join("binaries").join(&binary_name));
                 if cfg!(debug_assertions) {
                     push_sidecar_candidate(&mut sidecar_candidates, resource_dir.join("src-python").join("sidecar.py"));
-                }
-            }
-            if cfg!(debug_assertions) {
-                if let Ok(current_dir) = std::env::current_dir() {
-                    if current_dir.ends_with("src-tauri") {
-                        if let Some(parent) = current_dir.parent() {
-                            push_sidecar_candidate(&mut sidecar_candidates, parent.join("src-python").join("sidecar.py"));
-                        }
-                    }
-                    push_sidecar_candidate(&mut sidecar_candidates, current_dir.join("src-python").join("sidecar.py"));
                 }
             }
 

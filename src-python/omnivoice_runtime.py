@@ -1,5 +1,6 @@
 import importlib
 import os
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,6 +14,36 @@ DEFAULT_FRAME_RATE = 75
 
 class OmniVoiceDependencyError(RuntimeError):
     pass
+
+
+class OmniVoiceValidationError(ValueError):
+    pass
+
+
+_ZH_RE = re.compile(r"[\u4e00-\u9fff]")
+
+
+def _load_omnivoice_instruct_resolver():
+    try:
+        omnivoice_model_module = importlib.import_module("omnivoice.models.omnivoice")
+    except ImportError:
+        return None
+    return getattr(omnivoice_model_module, "_resolve_instruct", None)
+
+
+def normalize_instruct(instruct, target_text=None, resolver=None):
+    raw = str(instruct or "").strip()
+    if not raw:
+        return None
+
+    resolver = resolver or _load_omnivoice_instruct_resolver()
+    if resolver is None:
+        return raw
+
+    try:
+        return resolver(raw, use_zh=bool(target_text and _ZH_RE.search(target_text)))
+    except ValueError as exc:
+        raise OmniVoiceValidationError(str(exc)) from exc
 
 
 def compute_rms(audio):
@@ -278,7 +309,10 @@ class OmniVoiceRuntime:
             "duration_override_seconds": duration,
             "ref_text_chars": len((ref_text or "").strip()),
             "instruct_chars": len((instruct or "").strip()),
+            "normalized_instruct": None,
         }
+        normalized_instruct = normalize_instruct(instruct, target_text=target_text)
+        self.last_diagnostics["normalized_instruct"] = normalized_instruct
 
         voice_clone_prompt = None
         if ref_audio is not None:
@@ -326,8 +360,8 @@ class OmniVoiceRuntime:
         }
         if voice_clone_prompt is not None:
             generate_kwargs["voice_clone_prompt"] = voice_clone_prompt
-        if instruct and instruct.strip():
-            generate_kwargs["instruct"] = instruct.strip()
+        if normalized_instruct:
+            generate_kwargs["instruct"] = normalized_instruct
         if speed is not None and speed != 1.0:
             generate_kwargs["speed"] = speed
         if duration is not None and duration > 0:

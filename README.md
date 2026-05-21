@@ -17,3 +17,12 @@ npm run build
 ```
 
 For local packaged builds, use `build-local.sh` on macOS or `build-local.ps1` on Windows.
+
+## GitLab CI release builds
+
+The GitLab pipeline is tag/manual only so normal pushes do not spend runner minutes.
+
+- Default runner tags: `saas-macos-medium-m1`, `shared-windows`, `saas-linux-medium-amd64`.
+- If your GitLab project shows different runner tags, override `MACOS_RUNNER_TAG`, `WINDOWS_RUNNER_TAG`, or `LINUX_RUNNER_TAG` in CI/CD variables.
+- Tag a version such as `v0.4.2` to build macOS + Windows artifacts and create a GitLab Release.
+- The GitLab release job uploads installers to the Generic Package Registry and links them from the release.

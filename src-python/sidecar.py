@@ -8,7 +8,7 @@ import threading
 import traceback
 import numpy as np
 
-from omnivoice_runtime import OmniVoiceRuntime, get_available_hardware_devices
+from omnivoice_runtime import OmniVoiceRuntime, OmniVoiceValidationError, get_available_hardware_devices
 
 # Lock để đồng bộ hóa việc ghi ra stdout
 stdout_lock = threading.Lock()
@@ -60,6 +60,17 @@ class SidecarApp:
             "status": status,
             "progress": progress
         })
+
+    def start_progress_heartbeat(self, stop_event, started_at, interval=2.0):
+        def heartbeat():
+            while not stop_event.wait(interval):
+                elapsed = max(0.0, time.time() - started_at)
+                progress = min(0.95, 0.25 + min(elapsed, 180.0) / 180.0 * 0.70)
+                self.on_progress(f"Generating speech... {elapsed:.0f}s elapsed", progress)
+
+        thread = threading.Thread(target=heartbeat, daemon=True)
+        thread.start()
+        return thread
 
     def cancel_flag(self):
         return self.cancel_event.is_set()
@@ -114,9 +125,13 @@ class SidecarApp:
         diagnostics = {}
         
         start_time = time.time()
+        heartbeat_stop = threading.Event()
+        heartbeat_thread = None
         try:
+            self.on_progress("Decoding reference audio...", 0.05)
             ref_audio_np, ref_sample_rate, diagnostics = self.decode_reference_audio(ref_audio, params)
 
+            heartbeat_thread = self.start_progress_heartbeat(heartbeat_stop, start_time)
             audio, sample_rate = self.runtime.generate(
                 text=text,
                 ref_audio=ref_audio_np,
@@ -170,6 +185,13 @@ class SidecarApp:
                 "type": "stopped",
                 "message": "Generation stopped by user request."
             })
+        except OmniVoiceValidationError as e:
+            diagnostics = {**diagnostics, **getattr(self.runtime, "last_diagnostics", {})}
+            send_json({
+                "type": "error",
+                "message": str(e),
+                "diagnostics": diagnostics
+            })
         except Exception as e:
             traceback.print_exc()
             diagnostics = {**diagnostics, **getattr(self.runtime, "last_diagnostics", {})}
@@ -179,6 +201,9 @@ class SidecarApp:
                 "diagnostics": diagnostics
             })
         finally:
+            heartbeat_stop.set()
+            if heartbeat_thread is not None:
+                heartbeat_thread.join(timeout=1.0)
             self.is_generating = False
 
     def handle_command(self, line):
@@ -238,6 +263,10 @@ class SidecarApp:
                 instruct = data.get("instruct")
                 params = data.get("params", {})
 
+                send_json({
+                    "type": "status",
+                    "status": "generate_received",
+                })
                 self.inference_thread = threading.Thread(
                     target=self.run_inference,
                     args=(text, ref_audio, ref_text, instruct, params),
