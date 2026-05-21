@@ -88,6 +88,25 @@ jobs:
             find src-python/models -maxdepth 2 -type f -print
             exit 1
           fi
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          config = json.loads(Path("src-tauri/tauri.conf.json").read_text())
+          resources = config.get("bundle", {}).get("resources", {})
+          sources = resources.keys() if isinstance(resources, dict) else resources
+          forbidden = []
+          for source in sources:
+              normalized = str(source).replace("\\", "/").rstrip("/")
+              if normalized.endswith("src-python") or "src-python/models" in normalized:
+                  forbidden.append(source)
+          if forbidden:
+              raise SystemExit(
+                  "Tauri resources must not bundle OmniVoice model directories: "
+                  + ", ".join(map(str, forbidden))
+              )
+          print("No OmniVoice model directories are configured as Tauri resources.")
+          PY
 
       - name: setup node
         uses: actions/setup-node@v4
@@ -166,7 +185,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Voice Clone v__VERSION__"
-          releaseBody: "Bản phát hành tự động cho Voice Clone. App downloads OmniVoice model files from Hugging Face on first load and caches them locally instead of bundling model files in the installer. Windows ships one installer with PyTorch CUDA support: it uses CUDA when the machine has a compatible NVIDIA CUDA runtime available, and falls back to CPU otherwise. macOS public distribution requires Apple Developer ID signing and notarization; otherwise the draft build is ad-hoc signed for internal testing."
+          releaseBody: "Bản phát hành tự động cho Voice Clone. Installer không bundle OmniVoice model files; app downloads k2-fsa/OmniVoice from https://huggingface.co/k2-fsa/OmniVoice on first model load and caches them in the user's app data directory. Windows ships one installer with PyTorch CUDA support: it uses CUDA when the machine has a compatible NVIDIA CUDA runtime available, and falls back to CPU otherwise. macOS public distribution requires Apple Developer ID signing and notarization; otherwise the draft build is ad-hoc signed for internal testing."
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}

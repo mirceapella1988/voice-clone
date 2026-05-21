@@ -6,7 +6,7 @@ Tauri desktop app for zero-shot voice cloning with [OmniVoice](https://huggingfa
 
 - The Python sidecar loads `k2-fsa/OmniVoice` through the official `omnivoice` PyTorch API.
 - Device selection prefers CUDA, then Apple Silicon MPS, then CPU.
-- Model files are downloaded from Hugging Face on first load and cached locally instead of being bundled in the installer.
+- Installers do not bundle OmniVoice model files. Models are downloaded from https://huggingface.co/k2-fsa/OmniVoice on first model load and cached in the user's app data directory.
 
 ## Development
 

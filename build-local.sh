@@ -63,13 +63,11 @@ $PYINSTALLER \
 
 ok "Sidecar built: src-tauri/binaries/sidecar-${TARGET_TRIPLE}"
 
-# ── [3/4] Optional model cache prewarm ─────────────────────────────────────
-log "[3/4] OmniVoice model cache..."
-if [ "${PREWARM_OMNIVOICE_MODELS:-0}" = "1" ]; then
-    python3 src-python/download_models.py
-    ok "Models cached"
-else
-    warn "Skipping model prewarm. Set PREWARM_OMNIVOICE_MODELS=1 to cache k2-fsa/OmniVoice during build."
+# ── [3/4] Model bundle policy ──────────────────────────────────────────────
+log "[3/4] OmniVoice model bundle policy..."
+warn "OmniVoice model files are not bundled. Users download k2-fsa/OmniVoice from Hugging Face on first model load."
+if [ -d "src-python/models" ]; then
+    warn "Local src-python/models cache exists but is ignored and not configured as a Tauri resource."
 fi
 
 # ── [4/4] Build Tauri app ─────────────────────────────────────────────────
