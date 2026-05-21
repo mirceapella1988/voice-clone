@@ -48,6 +48,7 @@ jobs:
       - name: Build Python Sidecar Binary
         shell: bash
         run: |
+          rm -rf src-python/models
           mkdir -p src-tauri/binaries
           PYINSTALLER_ARGS=(
             --clean
@@ -111,6 +112,15 @@ jobs:
             pyinstaller "${PYINSTALLER_ARGS[@]}" --name sidecar-aarch64-apple-darwin src-python/sidecar.py
           fi
           du -sh src-tauri/binaries 2>/dev/null || true
+
+      - name: Assert model files are not bundled
+        shell: bash
+        run: |
+          if find src-python -path 'src-python/models/*' -type f | grep -q .; then
+            echo "::error::src-python/models must not exist in release builds; models are downloaded from Hugging Face on first load."
+            find src-python/models -maxdepth 2 -type f -print
+            exit 1
+          fi
 
       - name: setup node
         uses: actions/setup-node@v4
