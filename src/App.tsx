@@ -103,10 +103,9 @@ export default function App() {
   const [outputSampleRate, setOutputSampleRate] = useState<number>(24000);
 
   // Device detection state
-  const [devices, setDevices] = useState<{ id: string; name: string }[]>([
-    { id: "cpu", name: "CPU (Mặc định)" }
-  ]);
+  const [devices, setDevices] = useState<{ id: string; name: string }[]>([]);
   const [selectedDevice, setSelectedDevice] = useState<string>("auto");
+  const [devicesStatus, setDevicesStatus] = useState<"loading" | "ready" | "error">("loading");
   const [actualDevice, setActualDevice] = useState<string>("");
 
   // Logs & Metrics
@@ -363,6 +362,7 @@ export default function App() {
           } else if (data.type === "devices") {
             setDevices(data.devices);
             setSelectedDevice(data.auto_detect);
+            setDevicesStatus("ready");
             appendLog(`Available hardware devices: ${data.devices.map((d: any) => d.name).join(", ")}. Auto-detect selected: ${data.auto_detect.toUpperCase()}`);
           } else if (data.type === "progress") {
             const p = Math.round(data.progress * 100);
@@ -420,6 +420,9 @@ export default function App() {
           });
         } catch (err: any) {
           appendLog(`Failed to query devices: ${err.message || err}`);
+          setDevices([{ id: "cpu", name: "CPU (Mặc định)" }]);
+          setSelectedDevice("cpu");
+          setDevicesStatus("error");
         }
       }, 500);
     };
@@ -486,6 +489,11 @@ export default function App() {
   };
 
   const handleLoadModel = async () => {
+    if (devicesStatus === "loading") {
+      appendLog("Hardware devices are still loading. Please wait.");
+      return;
+    }
+
     setModelStatus("loading");
     setModelProgress(10);
     setModelProgressStatus("Đang khởi tạo sidecar...");
@@ -590,6 +598,9 @@ export default function App() {
   const formatDiagnosticNumber = (value?: number, digits = 0) =>
     typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "—";
 
+  const isDeviceSelectionDisabled = devicesStatus === "loading" || modelStatus !== "unloaded";
+  const isLoadModelDisabled = devicesStatus === "loading";
+
   return (
     <main className="app-shell">
       {/* ─── Header ─── */}
@@ -650,14 +661,17 @@ export default function App() {
                     className="device-select"
                     value={selectedDevice}
                     onChange={(e) => setSelectedDevice(e.target.value)}
+                    disabled={isDeviceSelectionDisabled}
                   >
-                    <option value="auto">⚡ Tự động phát hiện</option>
+                    <option value="auto">
+                      {devicesStatus === "loading" ? "Đang phát hiện thiết bị..." : "⚡ Tự động phát hiện"}
+                    </option>
                     {devices.map((dev) => (
                       <option key={dev.id} value={dev.id}>{dev.name}</option>
                     ))}
                   </select>
                 </div>
-                <button className="btn-primary" onClick={handleLoadModel}>
+                <button className="btn-primary" onClick={handleLoadModel} disabled={isLoadModelDisabled}>
                   Tải Model
                 </button>
               </div>

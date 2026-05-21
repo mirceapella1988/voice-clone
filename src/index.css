@@ -175,6 +175,11 @@ button, input, select, textarea {
   border-color: var(--accent);
 }
 
+.device-select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .device-select option {
   background: #14161e;
 }

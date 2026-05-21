@@ -11,6 +11,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import omnivoice_runtime
 from omnivoice_runtime import OmniVoiceRuntime, compute_scores, resample_audio_mono
 from sidecar import SidecarApp
 
@@ -142,6 +143,37 @@ class SidecarReferenceAudioTests(unittest.TestCase):
         self.assertEqual(len(audio), 2)
         self.assertAlmostEqual(float(audio[0]), 0.0, places=5)
         self.assertAlmostEqual(float(audio[1]), 0.5, places=5)
+
+
+class ProviderFallbackTests(unittest.TestCase):
+    def test_create_main_session_falls_back_to_cpu_when_cuda_provider_fails(self):
+        runtime = OmniVoiceRuntime()
+        emitted = []
+        runtime.progress_callback = lambda status, progress: emitted.append((status, progress))
+
+        calls = []
+
+        def fake_inference_session(_model_path, sess_options=None, providers=None):
+            calls.append(providers)
+            if providers == ["CUDAExecutionProvider", "CPUExecutionProvider"]:
+                raise RuntimeError("Invalid handle. Cannot load symbol cudnnCreate")
+            return object()
+
+        original_inference_session = omnivoice_runtime.ort.InferenceSession
+        omnivoice_runtime.ort.InferenceSession = fake_inference_session
+        try:
+            session = runtime._create_main_session(
+                "model.onnx",
+                sess_options=None,
+                providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+                allow_cpu_fallback=True,
+            )
+        finally:
+            omnivoice_runtime.ort.InferenceSession = original_inference_session
+
+        self.assertIsNotNone(session)
+        self.assertEqual(calls, [["CUDAExecutionProvider", "CPUExecutionProvider"], ["CPUExecutionProvider"]])
+        self.assertTrue(any("falling back to CPU" in status for status, _ in emitted))
 
 
 class ModelFileLookupTests(unittest.TestCase):

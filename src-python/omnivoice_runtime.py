@@ -552,6 +552,20 @@ class OmniVoiceRuntime:
             providers.append("CPUExecutionProvider")
         return providers
 
+    def _create_main_session(self, model_path, sess_options, providers, allow_cpu_fallback=False):
+        try:
+            return ort.InferenceSession(model_path, sess_options=sess_options, providers=providers)
+        except Exception as exc:
+            if not allow_cpu_fallback or providers == ["CPUExecutionProvider"]:
+                raise
+
+            self.emit(f"CUDA unavailable, falling back to CPU: {exc}", 35)
+            return ort.InferenceSession(
+                model_path,
+                sess_options=sess_options,
+                providers=["CPUExecutionProvider"],
+            )
+
     def _get_model_file(self, filename):
         resources_dir = os.environ.get("APP_RESOURCES_DIR")
         app_model_dir = os.environ.get("APP_MODEL_DIR")
@@ -606,7 +620,13 @@ class OmniVoiceRuntime:
         sess_opts.log_severity_level = 3  # Chỉ hiện Error, ẩn các cảnh báo Warning/Info
         
         providers = self._get_ort_providers(device)
-        self.sessions["main"] = ort.InferenceSession(main_model_path, sess_options=sess_opts, providers=providers)
+        allow_cpu_fallback = "CUDAExecutionProvider" in providers and device in ("auto", "cuda")
+        self.sessions["main"] = self._create_main_session(
+            main_model_path,
+            sess_opts,
+            providers,
+            allow_cpu_fallback=allow_cpu_fallback,
+        )
 
         self.emit("Checking decoder model...", 70)
         decoder_path = self._get_model_file("omnivoice-decoder-webgpu.onnx")
