@@ -67,11 +67,22 @@ jobs:
           )
           if [ "${{ matrix.platform }}" = "windows-latest" ]; then
             while IFS= read -r dll; do
+              dll="${dll//$'\r'/}"
+              if [ -z "$dll" ]; then
+                continue
+              fi
               PYINSTALLER_ARGS+=(--add-binary "$dll;onnxruntime/capi")
             done < <(python - <<'PY'
           import site
           from pathlib import Path
 
+          required_dlls = {
+              "cudart64_12.dll",
+              "cublas64_12.dll",
+              "cublasLt64_12.dll",
+              "cufft64_11.dll",
+              "cudnn64_9.dll",
+          }
           roots = [
               Path(base) / package / "bin"
               for base in site.getsitepackages()
@@ -85,7 +96,8 @@ jobs:
           for root in roots:
               if root.is_dir():
                   for dll in sorted(root.glob("*.dll")):
-                      print(dll)
+                      if dll.name in required_dlls:
+                          print(dll)
           PY
             )
             pyinstaller "${PYINSTALLER_ARGS[@]}" --name sidecar-x86_64-pc-windows-msvc src-python/sidecar.py
