@@ -46,6 +46,7 @@ jobs:
           PY
 
       - name: Download models from Hugging Face
+        if: matrix.platform != 'windows-latest'
         run: python src-python/download_models.py
 
       - name: Build Python Sidecar Binary
@@ -68,6 +69,7 @@ jobs:
           else
             pyinstaller "${PYINSTALLER_ARGS[@]}" --name sidecar-aarch64-apple-darwin src-python/sidecar.py
           fi
+          du -sh src-tauri/binaries src-python/models 2>/dev/null || true
 
       - name: setup node
         uses: actions/setup-node@v4
@@ -87,6 +89,23 @@ jobs:
 
       - name: install frontend dependencies
         run: npm install
+
+      - name: Keep Windows GPU installer under MSI size limits
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        run: |
+          rm -rf src-python/models
+          node - <<'NODE'
+          const fs = require('fs');
+          const configPath = 'src-tauri/tauri.conf.json';
+          const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+
+          if (config.bundle?.resources?.['../src-python/models']) {
+            delete config.bundle.resources['../src-python/models'];
+          }
+
+          fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+          NODE
 
       - name: Configure macOS signing
         if: matrix.platform == 'macos-latest'
@@ -146,7 +165,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Voice Clone v__VERSION__"
-          releaseBody: "Bản phát hành tự động cho Voice Clone. macOS public distribution requires Apple Developer ID signing and notarization; otherwise the draft build is ad-hoc signed for internal testing."
+          releaseBody: "Bản phát hành tự động cho Voice Clone. Windows GPU build uses onnxruntime-gpu and downloads OmniVoice model files on first load to avoid MSI size limits. macOS public distribution requires Apple Developer ID signing and notarization; otherwise the draft build is ad-hoc signed for internal testing."
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
