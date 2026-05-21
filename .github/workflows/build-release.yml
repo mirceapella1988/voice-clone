@@ -36,13 +36,18 @@ jobs:
         run: |
           pip install -r src-python/requirements.txt
           if [ "${{ matrix.platform }}" = "windows-latest" ]; then
-            pip uninstall -y onnxruntime
-            pip install onnxruntime-gpu
+            pip install --force-reinstall --index-url https://download.pytorch.org/whl/cu128 torch==2.8.0+cu128 torchaudio==2.8.0+cu128
           fi
           pip install pyinstaller
           python - <<'PY'
-          import onnxruntime as ort
-          print("ONNX Runtime providers:", ort.get_available_providers())
+          import torch
+          from omnivoice import OmniVoice, OmniVoiceGenerationConfig
+
+          print("PyTorch version:", torch.__version__)
+          print("CUDA available:", torch.cuda.is_available())
+          if torch.cuda.is_available():
+              print("CUDA device:", torch.cuda.get_device_name(0))
+          print("OmniVoice imports: ok", OmniVoice.__name__, OmniVoiceGenerationConfig.__name__)
           PY
 
       - name: Build Python Sidecar Binary
@@ -55,10 +60,18 @@ jobs:
             -y
             --onefile
             --distpath src-tauri/binaries
-            --collect-all onnxruntime
-            --collect-all tokenizers
+            --collect-all omnivoice
+            --collect-all torch
+            --collect-all torchaudio
+            --collect-all transformers
+            --collect-all accelerate
+            --collect-all safetensors
+            --collect-all soundfile
+            --collect-all librosa
+            --collect-all pydub
             --collect-data huggingface_hub
             --collect-all hf_xet
+            --hidden-import transformers.models.qwen3
           )
           if [ "${{ matrix.platform }}" = "windows-latest" ]; then
             pyinstaller "${PYINSTALLER_ARGS[@]}" --name sidecar-x86_64-pc-windows-msvc src-python/sidecar.py
@@ -153,7 +166,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Voice Clone v__VERSION__"
-          releaseBody: "Bản phát hành tự động cho Voice Clone. App downloads OmniVoice model files from Hugging Face on first load and caches them locally instead of bundling model files in the installer. Windows ships one installer with ONNX Runtime GPU support: it uses CUDA when the machine has a compatible NVIDIA CUDA/cuDNN runtime available, and falls back to CPU otherwise. macOS public distribution requires Apple Developer ID signing and notarization; otherwise the draft build is ad-hoc signed for internal testing."
+          releaseBody: "Bản phát hành tự động cho Voice Clone. App downloads OmniVoice model files from Hugging Face on first load and caches them locally instead of bundling model files in the installer. Windows ships one installer with PyTorch CUDA support: it uses CUDA when the machine has a compatible NVIDIA CUDA runtime available, and falls back to CPU otherwise. macOS public distribution requires Apple Developer ID signing and notarization; otherwise the draft build is ad-hoc signed for internal testing."
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
