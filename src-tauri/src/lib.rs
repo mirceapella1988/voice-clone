@@ -8,6 +8,7 @@ use tauri::{Emitter, Manager, State};
 struct SidecarState {
     child: Mutex<Option<std::process::Child>>,
     stdin: Mutex<Option<std::process::ChildStdin>>,
+    startup_error: Mutex<Option<String>>,
 }
 
 fn push_sidecar_candidate(candidates: &mut Vec<PathBuf>, path: PathBuf) {
@@ -28,6 +29,18 @@ fn is_usable_sidecar_candidate(path: &Path) -> bool {
     path.metadata()
         .map(|metadata| metadata.len() > 1024)
         .unwrap_or(false)
+}
+
+fn append_release_sidecar_candidates(
+    candidates: &mut Vec<PathBuf>,
+    base_dir: &Path,
+    runtime_binary_name: &str,
+    binary_name: &str,
+) {
+    push_sidecar_candidate(candidates, base_dir.join(runtime_binary_name));
+    push_sidecar_candidate(candidates, base_dir.join(binary_name));
+    push_sidecar_candidate(candidates, base_dir.join("binaries").join(runtime_binary_name));
+    push_sidecar_candidate(candidates, base_dir.join("binaries").join(binary_name));
 }
 
 fn voiceclone_model_dir_from_home(home_dir: PathBuf) -> PathBuf {
@@ -69,7 +82,10 @@ fn hide_subprocess_window(_command: &mut Command) {}
 
 #[cfg(test)]
 mod tests {
-    use super::{is_usable_sidecar_candidate, push_sidecar_candidate, voiceclone_model_dir_from_home};
+    use super::{
+        append_release_sidecar_candidates, is_usable_sidecar_candidate, push_sidecar_candidate,
+        voiceclone_model_dir_from_home,
+    };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -119,6 +135,29 @@ mod tests {
     }
 
     #[test]
+    fn release_sidecar_candidates_include_tauri_resource_binary_folder() {
+        let mut candidates = Vec::new();
+        let base = std::path::Path::new("resources");
+
+        append_release_sidecar_candidates(
+            &mut candidates,
+            base,
+            "sidecar.exe",
+            "sidecar-x86_64-pc-windows-msvc.exe",
+        );
+
+        assert_eq!(
+            candidates,
+            vec![
+                std::path::PathBuf::from("resources/sidecar.exe"),
+                std::path::PathBuf::from("resources/sidecar-x86_64-pc-windows-msvc.exe"),
+                std::path::PathBuf::from("resources/binaries/sidecar.exe"),
+                std::path::PathBuf::from("resources/binaries/sidecar-x86_64-pc-windows-msvc.exe"),
+            ]
+        );
+    }
+
+    #[test]
     fn voiceclone_model_dir_uses_hidden_home_directory() {
         let home = std::path::PathBuf::from("/Users/example");
 
@@ -148,9 +187,14 @@ fn send_to_sidecar(state: State<'_, SidecarState>, msg: String) -> Result<(), St
             if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
                 *child_guard = None;
                 *state.stdin.lock().map_err(|e| e.to_string())? = None;
+                *state.startup_error.lock().map_err(|e| e.to_string())? =
+                    Some(format!("Sidecar exited before handling command: {status}"));
                 return Err(format!("Sidecar exited before handling command: {status}"));
             }
         } else {
+            if let Some(error) = state.startup_error.lock().map_err(|e| e.to_string())?.as_ref() {
+                return Err(format!("Python sidecar is not running: {error}"));
+            }
             return Err("Python sidecar is not running".to_string());
         }
     }
@@ -179,6 +223,7 @@ pub fn run() {
         .manage(SidecarState {
             child: Mutex::new(None),
             stdin: Mutex::new(None),
+            startup_error: Mutex::new(None),
         })
         .setup(|app| {
             let target_triple = if cfg!(target_os = "windows") {
@@ -214,32 +259,50 @@ pub fn run() {
             }
             if let Ok(current_exe) = std::env::current_exe() {
                 if let Some(exe_dir) = current_exe.parent() {
-                    push_sidecar_candidate(&mut sidecar_candidates, exe_dir.join(&runtime_binary_name));
-                    push_sidecar_candidate(&mut sidecar_candidates, exe_dir.join(&binary_name));
+                    append_release_sidecar_candidates(
+                        &mut sidecar_candidates,
+                        exe_dir,
+                        &runtime_binary_name,
+                        &binary_name,
+                    );
                 }
             }
             if let Ok(resource_dir) = app.path().resource_dir() {
-                push_sidecar_candidate(&mut sidecar_candidates, resource_dir.join(&runtime_binary_name));
-                push_sidecar_candidate(&mut sidecar_candidates, resource_dir.join(&binary_name));
-                push_sidecar_candidate(&mut sidecar_candidates, resource_dir.join("binaries").join(&binary_name));
+                append_release_sidecar_candidates(
+                    &mut sidecar_candidates,
+                    &resource_dir,
+                    &runtime_binary_name,
+                    &binary_name,
+                );
                 if cfg!(debug_assertions) {
                     push_sidecar_candidate(&mut sidecar_candidates, resource_dir.join("src-python").join("sidecar.py"));
                 }
             }
 
+            let searched_sidecar_paths = sidecar_candidates
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
             let Some(sidecar_path) = sidecar_candidates
-                .into_iter()
+                .iter()
                 .find(|path| is_usable_sidecar_candidate(path))
+                .cloned()
             else {
                 let message = if cfg!(debug_assertions) {
-                    "Failed to find a usable Python sidecar binary or dev script"
+                    format!(
+                        "Failed to find a usable Python sidecar binary or dev script. Searched: {searched_sidecar_paths}"
+                    )
                 } else {
-                    "Failed to find bundled Python sidecar binary. Please reinstall the app or rebuild the Windows release."
+                    format!(
+                        "Failed to find bundled Python sidecar binary. Please reinstall the app or rebuild the Windows release. Searched: {searched_sidecar_paths}"
+                    )
                 };
                 eprintln!("{message}");
+                *app.state::<SidecarState>().startup_error.lock().unwrap() = Some(message.clone());
                 let _ = app.emit(
                     "sidecar-event",
-                    format!(r#"{{"type":"error","message":"{message}"}}"#),
+                    serde_json::json!({"type":"error","message":message}).to_string(),
                 );
                 return Ok(());
             };
@@ -345,6 +408,7 @@ pub fn run() {
                     let state = app.state::<SidecarState>();
                     *state.child.lock().unwrap() = Some(child);
                     *state.stdin.lock().unwrap() = Some(stdin);
+                    *state.startup_error.lock().unwrap() = None;
 
                     // Spawn thread đọc stdout bất đồng bộ
                     let app_handle = app.handle().clone();
@@ -375,6 +439,7 @@ pub fn run() {
                 Err(e) => {
                     let message = format!("Failed to start Python sidecar: {e}");
                     eprintln!("{message}");
+                    *app.state::<SidecarState>().startup_error.lock().unwrap() = Some(message.clone());
                     let _ = app.emit(
                         "sidecar-event",
                         serde_json::json!({"type":"error","message":message}).to_string(),
