@@ -18,6 +18,35 @@ def send_json(data):
         sys.stdout.write(json.dumps(data) + "\n")
         sys.stdout.flush()
 
+
+def read_next_command(input_buffer):
+    while True:
+        line = input_buffer.readline()
+        if not line:
+            return None
+
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        if stripped.lower().startswith(b"content-length:"):
+            try:
+                length = int(stripped.split(b":", 1)[1].strip())
+            except ValueError as exc:
+                raise ValueError("Invalid command frame content length") from exc
+
+            separator = input_buffer.readline()
+            if separator not in (b"\n", b"\r\n", b""):
+                raise ValueError("Invalid command frame separator")
+
+            payload = input_buffer.read(length)
+            if len(payload) != length:
+                raise EOFError("Incomplete command frame payload")
+            return payload.decode("utf-8")
+
+        return line.decode("utf-8")
+
+
 class SidecarApp:
     def __init__(self):
         self.runtime = OmniVoiceRuntime(self.on_progress)
@@ -228,10 +257,17 @@ class SidecarApp:
 
     def main_loop(self):
         send_json({"type": "status", "status": "started"})
-        for line in sys.stdin:
-            if not line:
+        input_buffer = sys.stdin.buffer
+        while True:
+            try:
+                command = read_next_command(input_buffer)
+            except Exception as e:
+                send_json({"type": "error", "message": f"Invalid command frame: {str(e)}"})
+                continue
+
+            if command is None:
                 break
-            self.handle_command(line)
+            self.handle_command(command)
 
 if __name__ == "__main__":
     app = SidecarApp()

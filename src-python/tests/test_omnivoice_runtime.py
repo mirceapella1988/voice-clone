@@ -23,6 +23,7 @@ from omnivoice_runtime import (
     to_mono_audio,
 )
 from sidecar import SidecarApp
+from sidecar import read_next_command
 
 
 class FakeTensor:
@@ -353,6 +354,23 @@ class SidecarReferenceAudioTests(unittest.TestCase):
         self.assertEqual(message["type"], "error")
         self.assertIn("Invalid JSON command:", message["message"])
         self.assertNotIn("command command", message["message"])
+
+    def test_read_next_command_reads_content_length_frame(self):
+        payload = json.dumps({
+            "command": "generate",
+            "text": "Xin chào",
+            "ref_audio": "A" * 100_000,
+        })
+        frame = f"Content-Length: {len(payload.encode('utf-8'))}\n\n".encode("utf-8")
+        framed_input = io.BytesIO(frame + payload.encode("utf-8") + b"\n")
+
+        self.assertEqual(read_next_command(framed_input), payload)
+        self.assertIsNone(read_next_command(framed_input))
+
+    def test_read_next_command_keeps_legacy_line_json_fallback(self):
+        payload = '{"command":"get_devices"}\n'
+
+        self.assertEqual(read_next_command(io.BytesIO(payload.encode("utf-8"))), payload)
 
 
 if __name__ == "__main__":

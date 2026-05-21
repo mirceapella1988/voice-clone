@@ -108,8 +108,12 @@ fn send_to_sidecar(state: State<'_, SidecarState>, msg: String) -> Result<(), St
     if msg.is_empty() {
         return Err("Refusing to send an empty command to Python sidecar".to_string());
     }
-    serde_json::from_str::<serde_json::Value>(msg)
-        .map_err(|e| format!("Refusing to send invalid JSON to Python sidecar: {e}"))?;
+    match serde_json::from_str::<serde_json::Value>(msg)
+        .map_err(|e| format!("Refusing to send invalid JSON to Python sidecar: {e}"))?
+    {
+        serde_json::Value::Object(_) => {}
+        _ => return Err("Refusing to send non-object JSON to Python sidecar".to_string()),
+    }
 
     {
         let mut child_guard = state.child.lock().map_err(|e| e.to_string())?;
@@ -126,7 +130,12 @@ fn send_to_sidecar(state: State<'_, SidecarState>, msg: String) -> Result<(), St
 
     let mut stdin_guard = state.stdin.lock().map_err(|e| e.to_string())?;
     if let Some(ref mut stdin) = *stdin_guard {
-        if let Err(e) = writeln!(stdin, "{}", msg).and_then(|_| stdin.flush()) {
+        let msg_bytes = msg.as_bytes();
+        if let Err(e) = write!(stdin, "Content-Length: {}\n\n", msg_bytes.len())
+            .and_then(|_| stdin.write_all(msg_bytes))
+            .and_then(|_| stdin.write_all(b"\n"))
+            .and_then(|_| stdin.flush())
+        {
             *stdin_guard = None;
             return Err(format!("Failed to write to Python sidecar: {e}"));
         }
