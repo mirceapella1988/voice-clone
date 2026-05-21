@@ -8,7 +8,7 @@ import threading
 import traceback
 import numpy as np
 
-from omnivoice_runtime import OmniVoiceRuntime
+from omnivoice_runtime import OmniVoiceRuntime, get_available_hardware_devices
 
 # Lock để đồng bộ hóa việc ghi ra stdout
 stdout_lock = threading.Lock()
@@ -115,8 +115,11 @@ class SidecarApp:
             duration_sec = len(audio) / sample_rate
             rtf = elapsed / duration_sec if duration_sec > 0 else 0
             
-            # Tính toán tokens/s ước lượng
-            tokens_generated = len(audio) / (sample_rate / 25.0) # Frame rate = 25
+            # Tính toán tokens/s ước lượng theo frame rate của audio tokenizer.
+            audio_tokenizer = getattr(getattr(self.runtime, "model", None), "audio_tokenizer", None)
+            tokenizer_config = getattr(audio_tokenizer, "config", None)
+            frame_rate = float(getattr(tokenizer_config, "frame_rate", 75.0))
+            tokens_generated = len(audio) / (sample_rate / frame_rate)
             tokens_per_sec = tokens_generated / elapsed if elapsed > 0 else 0
             diagnostics = {**diagnostics, **getattr(self.runtime, "last_diagnostics", {})}
 
@@ -160,38 +163,30 @@ class SidecarApp:
                 def load_task(dev):
                     try:
                         self.runtime.load(device=dev)
-                        actual_providers = self.runtime.sessions["main"].get_providers()
-                        actual_device = "cpu"
-                        if "CUDAExecutionProvider" in actual_providers:
-                            actual_device = "cuda"
-                        elif "CoreMLExecutionProvider" in actual_providers:
-                            actual_device = "mps"
                         send_json({
                             "type": "status",
                             "status": "ready",
                             "success": True,
-                            "actual_device": actual_device,
-                            "providers": actual_providers
+                            "actual_device": self.runtime.actual_device,
+                            "providers": [self.runtime.actual_device]
                         })
                     except Exception as e:
                         send_json({"type": "error", "message": f"Failed to load model: {str(e)}"})
                 threading.Thread(target=load_task, args=(device,), daemon=True).start()
 
             elif cmd == "get_devices":
-                import onnxruntime as ort
-                available = ort.get_available_providers()
-                devices = [{"id": "cpu", "name": "CPU (Mặc định)"}]
-                auto_detect = "cpu"
-                if "CUDAExecutionProvider" in available:
-                    devices.append({"id": "cuda", "name": "NVIDIA GPU (CUDA)"})
-                    auto_detect = "cuda"
-                if "CoreMLExecutionProvider" in available:
-                    devices.append({"id": "mps", "name": "Apple Silicon (CoreML)"})
-                    auto_detect = "mps"
+                hardware = get_available_hardware_devices()
+                devices = hardware["devices"]
+                for device_info in devices:
+                    if device_info["id"] == "cpu":
+                        device_info["name"] = "CPU (Mặc định)"
+                    elif device_info["id"] == "mps":
+                        device_info["name"] = "Apple Silicon (MPS)"
                 send_json({
                     "type": "devices",
                     "devices": devices,
-                    "auto_detect": auto_detect
+                    "auto_detect": hardware["auto_detect"],
+                    "diagnostics": hardware.get("diagnostics", {})
                 })
 
             elif cmd == "generate":

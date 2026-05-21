@@ -1,41 +1,279 @@
-import sys
-import unittest
 import base64
 import io
 import os
+import sys
 import tempfile
+import unittest
 import wave
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import omnivoice_runtime
-from omnivoice_runtime import OmniVoiceRuntime, compute_scores, resample_audio_mono
+from omnivoice_runtime import (
+    MODEL_REPO,
+    OmniVoiceRuntime,
+    get_available_hardware_devices,
+    to_mono_audio,
+)
 from sidecar import SidecarApp
 
 
-class AudioResampleTests(unittest.TestCase):
-    def test_resample_audio_mono_keeps_matching_sample_rate(self):
-        audio = np.array([0.0, 0.25, -0.25, 0.5], dtype=np.float32)
+class FakeTensor:
+    def __init__(self, array):
+        self.array = np.asarray(array)
 
-        resampled = resample_audio_mono(audio, 24000, 24000)
 
-        np.testing.assert_allclose(resampled, audio)
-        self.assertEqual(resampled.dtype, np.float32)
+class FakeCuda:
+    def __init__(self, available):
+        self.available = available
 
-    def test_resample_audio_mono_downsamples_to_target_length(self):
-        audio = np.linspace(-1.0, 1.0, 48000, dtype=np.float32)
+    def is_available(self):
+        return self.available
 
-        resampled = resample_audio_mono(audio, 48000, 24000)
 
-        self.assertEqual(len(resampled), 24000)
-        self.assertEqual(resampled.dtype, np.float32)
-        self.assertTrue(np.all(np.isfinite(resampled)))
-        self.assertLessEqual(float(np.max(np.abs(resampled))), 1.1)
+class FakeMps:
+    def __init__(self, available):
+        self.available = available
 
-    def test_resample_audio_mono_averages_stereo_channels(self):
+    def is_available(self):
+        return self.available
+
+
+class FakeTorch:
+    float16 = "float16"
+    float32 = "float32"
+
+    def __init__(self, cuda=False, mps=False):
+        self.cuda = FakeCuda(cuda)
+        self.backends = SimpleNamespace(mps=FakeMps(mps))
+        self.from_numpy_calls = []
+
+    def from_numpy(self, array):
+        tensor = FakeTensor(array)
+        self.from_numpy_calls.append(tensor)
+        return tensor
+
+
+class FakeGenerationConfig:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+
+class FakeRefTokens:
+    def __init__(self, count):
+        self.count = count
+
+    def size(self, dim):
+        self.last_dim = dim
+        return self.count
+
+
+class FakePrompt:
+    def __init__(self):
+        self.ref_audio_tokens = FakeRefTokens(25)
+        self.ref_rms = 0.08
+        self.ref_text = "reference text."
+
+
+class FakeModel:
+    def __init__(self):
+        self.sampling_rate = 24000
+        self.audio_tokenizer = SimpleNamespace(config=SimpleNamespace(frame_rate=75))
+        self.prompt = FakePrompt()
+        self.prompt_kwargs = None
+        self.generate_kwargs = None
+
+    def create_voice_clone_prompt(self, **kwargs):
+        self.prompt_kwargs = kwargs
+        return self.prompt
+
+    def generate(self, **kwargs):
+        self.generate_kwargs = kwargs
+        return [np.array([0.0, 0.25, -0.25], dtype=np.float32)]
+
+
+class FakeOmniVoice:
+    load_kwargs = None
+    model = None
+
+    @classmethod
+    def from_pretrained(cls, model_path, **kwargs):
+        cls.load_kwargs = {"model_path": model_path, **kwargs}
+        cls.model = FakeModel()
+        return cls.model
+
+
+class RuntimeLoadTests(unittest.TestCase):
+    def setUp(self):
+        self.original_app_model_dir = os.environ.get("APP_MODEL_DIR")
+        self.original_omnivoice_model = os.environ.get("OMNIVOICE_MODEL")
+
+    def tearDown(self):
+        if self.original_app_model_dir is None:
+            os.environ.pop("APP_MODEL_DIR", None)
+        else:
+            os.environ["APP_MODEL_DIR"] = self.original_app_model_dir
+
+        if self.original_omnivoice_model is None:
+            os.environ.pop("OMNIVOICE_MODEL", None)
+        else:
+            os.environ["OMNIVOICE_MODEL"] = self.original_omnivoice_model
+
+    def test_load_downloads_public_snapshot_without_token_and_uses_cuda_dtype(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["APP_MODEL_DIR"] = tmp
+            fake_torch = FakeTorch(cuda=True)
+            calls = []
+
+            def fake_snapshot_download(**kwargs):
+                calls.append(kwargs)
+                return str(Path(tmp) / "snapshot")
+
+            runtime = OmniVoiceRuntime()
+            runtime._load_modules = lambda: (fake_torch, FakeOmniVoice, FakeGenerationConfig)
+
+            with patch.object(omnivoice_runtime, "snapshot_download", side_effect=fake_snapshot_download):
+                runtime.load(device="auto")
+
+            self.assertEqual(calls[0]["repo_id"], MODEL_REPO)
+            self.assertEqual(calls[0]["cache_dir"], tmp)
+            self.assertFalse(calls[0]["token"])
+            self.assertEqual(runtime.actual_device, "cuda")
+            self.assertEqual(FakeOmniVoice.load_kwargs["device_map"], "cuda")
+            self.assertEqual(FakeOmniVoice.load_kwargs["dtype"], fake_torch.float16)
+            self.assertFalse(FakeOmniVoice.load_kwargs["load_asr"])
+
+    def test_load_uses_float32_for_cpu(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["APP_MODEL_DIR"] = tmp
+            fake_torch = FakeTorch(cuda=False, mps=False)
+            runtime = OmniVoiceRuntime()
+            runtime._load_modules = lambda: (fake_torch, FakeOmniVoice, FakeGenerationConfig)
+
+            with patch.object(omnivoice_runtime, "snapshot_download", return_value=str(Path(tmp) / "snapshot")):
+                runtime.load(device="cpu")
+
+            self.assertEqual(runtime.actual_device, "cpu")
+            self.assertEqual(FakeOmniVoice.load_kwargs["dtype"], fake_torch.float32)
+
+
+class RuntimeGenerateTests(unittest.TestCase):
+    def make_loaded_runtime(self):
+        runtime = OmniVoiceRuntime()
+        runtime.model = FakeModel()
+        runtime.model_path = "/tmp/omnivoice"
+        runtime.device = "auto"
+        runtime.actual_device = "cuda"
+        runtime.sampling_rate = 24000
+        runtime._torch = FakeTorch(cuda=True)
+        runtime._generation_config_cls = FakeGenerationConfig
+        return runtime
+
+    def test_generate_matches_space_voice_clone_prompt_flow(self):
+        runtime = self.make_loaded_runtime()
+
+        audio, sample_rate = runtime.generate(
+            text="Xin chao",
+            ref_audio=np.zeros(48000, dtype=np.float32),
+            ref_text="Reference text",
+            instruct="warm voice",
+            params={
+                "ref_sample_rate": 48000,
+                "language_id": "vi",
+                "num_step": 24,
+                "guidance_scale": 1.5,
+                "speed": 1.2,
+                "duration": None,
+                "denoise": True,
+                "preprocess_prompt": True,
+                "postprocess_output": False,
+            },
+        )
+
+        self.assertEqual(sample_rate, 24000)
+        np.testing.assert_allclose(audio, np.array([0.0, 0.25, -0.25], dtype=np.float32))
+
+        prompt_kwargs = runtime.model.prompt_kwargs
+        self.assertEqual(prompt_kwargs["ref_text"], "Reference text")
+        self.assertTrue(prompt_kwargs["preprocess_prompt"])
+        waveform, prompt_sample_rate = prompt_kwargs["ref_audio"]
+        self.assertIsInstance(waveform, FakeTensor)
+        self.assertEqual(prompt_sample_rate, 48000)
+        self.assertEqual(waveform.array.dtype, np.float32)
+
+        generate_kwargs = runtime.model.generate_kwargs
+        self.assertEqual(generate_kwargs["text"], "Xin chao")
+        self.assertEqual(generate_kwargs["language"], "vi")
+        self.assertEqual(generate_kwargs["voice_clone_prompt"], runtime.model.prompt)
+        self.assertEqual(generate_kwargs["instruct"], "warm voice")
+        self.assertEqual(generate_kwargs["speed"], 1.2)
+        self.assertNotIn("duration", generate_kwargs)
+
+        gen_config = generate_kwargs["generation_config"]
+        self.assertEqual(gen_config.num_step, 24)
+        self.assertEqual(gen_config.guidance_scale, 1.5)
+        self.assertTrue(gen_config.denoise)
+        self.assertTrue(gen_config.preprocess_prompt)
+        self.assertFalse(gen_config.postprocess_output)
+
+        self.assertEqual(runtime.last_diagnostics["model_repo"], MODEL_REPO)
+        self.assertEqual(runtime.last_diagnostics["reference_token_count"], 25)
+        self.assertAlmostEqual(runtime.last_diagnostics["reference_processed_duration_seconds"], 25 / 75)
+
+    def test_generate_sends_duration_when_positive(self):
+        runtime = self.make_loaded_runtime()
+
+        runtime.generate(
+            text="hello",
+            ref_audio=np.zeros(24000, dtype=np.float32),
+            ref_text="hello",
+            params={"duration": 2.5, "speed": 0.8},
+        )
+
+        self.assertEqual(runtime.model.generate_kwargs["duration"], 2.5)
+        self.assertEqual(runtime.model.generate_kwargs["speed"], 0.8)
+
+    def test_generate_respects_cancel_before_prompt_creation(self):
+        runtime = self.make_loaded_runtime()
+
+        with self.assertRaises(InterruptedError):
+            runtime.generate(
+                text="hello",
+                ref_audio=np.zeros(24000, dtype=np.float32),
+                ref_text="hello",
+                cancel_flag=lambda: True,
+            )
+
+        self.assertIsNone(runtime.model.prompt_kwargs)
+
+
+class HardwareDetectionTests(unittest.TestCase):
+    def test_detects_cuda_before_mps_for_auto(self):
+        hardware = get_available_hardware_devices(lambda: FakeTorch(cuda=True, mps=True))
+
+        self.assertEqual(hardware["auto_detect"], "cuda")
+        self.assertEqual([device["id"] for device in hardware["devices"]], ["cpu", "cuda", "mps"])
+
+    def test_missing_torch_reports_cpu_only(self):
+        def missing_torch():
+            raise ImportError("torch")
+
+        hardware = get_available_hardware_devices(missing_torch)
+
+        self.assertEqual(hardware["auto_detect"], "cpu")
+        self.assertEqual([device["id"] for device in hardware["devices"]], ["cpu"])
+        self.assertFalse(hardware["diagnostics"]["torch_available"])
+
+
+class AudioHelperTests(unittest.TestCase):
+    def test_to_mono_audio_averages_stereo_channels(self):
         audio = np.array(
             [
                 [1.0, 0.5, -0.5, -1.0],
@@ -44,82 +282,9 @@ class AudioResampleTests(unittest.TestCase):
             dtype=np.float32,
         )
 
-        resampled = resample_audio_mono(audio, 24000, 24000)
+        mono = to_mono_audio(audio)
 
-        np.testing.assert_allclose(resampled, np.zeros(4, dtype=np.float32))
-
-    def test_runtime_resamples_reference_audio_before_encoding(self):
-        runtime = OmniVoiceRuntime()
-        runtime.config = {
-            "audio_mask_id": 1024,
-            "audio_vocab_size": 1025,
-            "sampling_rate": 24000,
-            "frame_rate": 75,
-        }
-
-        captured = {}
-        runtime.load_encoder = lambda: None
-
-        def fake_encode(audio):
-            captured["encoded_len"] = len(audio)
-            return np.zeros((8, 25), dtype=np.int64)
-
-        runtime._encode_audio = fake_encode
-        runtime._generate_token_sequence = lambda *args, **kwargs: {
-            "target_ids": np.zeros(8, dtype=np.int32),
-            "T_target": 1,
-        }
-        runtime._decode_audio = lambda target_ids, target_len: np.zeros(2400, dtype=np.float32)
-
-        runtime.generate(
-            text="hello",
-            ref_audio=np.zeros(48000, dtype=np.float32),
-            ref_text="hello",
-            params={
-                "ref_sample_rate": 48000,
-                "preprocess_prompt": False,
-                "postprocess_output": False,
-            },
-        )
-
-        self.assertEqual(captured["encoded_len"], 24000)
-        self.assertEqual(runtime.last_diagnostics["reference_resample_method"], "numpy")
-        self.assertEqual(runtime.last_diagnostics["reference_token_count"], 25)
-        self.assertGreater(runtime.last_diagnostics["target_token_count"], 0)
-        self.assertEqual(runtime.last_diagnostics["chunk_count"], 1)
-
-    def test_compute_scores_matches_log_softmax_guidance(self):
-        cond_logits = np.array([[[2.0, 0.0, -1.0]]], dtype=np.float32)
-        uncond_logits = np.array([[[0.0, 2.0, -1.0]]], dtype=np.float32)
-        masked = np.array([1], dtype=np.uint8)
-
-        original_uniform = np.random.uniform
-        np.random.uniform = lambda *_args, **_kwargs: np.exp(-1.0)
-        try:
-            pred_tokens, scores = compute_scores(
-                cond_logits,
-                uncond_logits,
-                masked,
-                guidance_scale=2.0,
-                num_cb=1,
-                T=1,
-                vocab_size=3,
-                mask_id=2,
-            )
-        finally:
-            np.random.uniform = original_uniform
-
-        def log_softmax(values):
-            stable = values - np.max(values)
-            return stable - np.log(np.sum(np.exp(stable)))
-
-        c_log = log_softmax(cond_logits[0, 0])
-        u_log = log_softmax(uncond_logits[0, 0])
-        expected_log_probs = log_softmax(c_log + 2.0 * (c_log - u_log))
-        expected_log_probs[2] = -np.inf
-
-        self.assertEqual(int(pred_tokens[0]), int(np.argmax(expected_log_probs)))
-        self.assertAlmostEqual(float(scores[0]), float(np.max(expected_log_probs) / 5.0), places=6)
+        np.testing.assert_allclose(mono, np.zeros(4, dtype=np.float32))
 
 
 class SidecarReferenceAudioTests(unittest.TestCase):
@@ -143,83 +308,6 @@ class SidecarReferenceAudioTests(unittest.TestCase):
         self.assertEqual(len(audio), 2)
         self.assertAlmostEqual(float(audio[0]), 0.0, places=5)
         self.assertAlmostEqual(float(audio[1]), 0.5, places=5)
-
-
-class ProviderFallbackTests(unittest.TestCase):
-    def test_create_main_session_falls_back_to_cpu_when_cuda_provider_fails(self):
-        runtime = OmniVoiceRuntime()
-        emitted = []
-        runtime.progress_callback = lambda status, progress: emitted.append((status, progress))
-
-        calls = []
-
-        def fake_inference_session(_model_path, sess_options=None, providers=None):
-            calls.append(providers)
-            if providers == ["CUDAExecutionProvider", "CPUExecutionProvider"]:
-                raise RuntimeError("Invalid handle. Cannot load symbol cudnnCreate")
-            return object()
-
-        original_inference_session = omnivoice_runtime.ort.InferenceSession
-        omnivoice_runtime.ort.InferenceSession = fake_inference_session
-        try:
-            session = runtime._create_main_session(
-                "model.onnx",
-                sess_options=None,
-                providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
-                allow_cpu_fallback=True,
-            )
-        finally:
-            omnivoice_runtime.ort.InferenceSession = original_inference_session
-
-        self.assertIsNotNone(session)
-        self.assertEqual(calls, [["CUDAExecutionProvider", "CPUExecutionProvider"], ["CPUExecutionProvider"]])
-        self.assertTrue(any("falling back to CPU" in status for status, _ in emitted))
-
-
-class ModelFileLookupTests(unittest.TestCase):
-    def setUp(self):
-        self.original_app_model_dir = os.environ.get("APP_MODEL_DIR")
-        self.original_resources_dir = os.environ.get("APP_RESOURCES_DIR")
-
-    def tearDown(self):
-        if self.original_app_model_dir is None:
-            os.environ.pop("APP_MODEL_DIR", None)
-        else:
-            os.environ["APP_MODEL_DIR"] = self.original_app_model_dir
-
-        if self.original_resources_dir is None:
-            os.environ.pop("APP_RESOURCES_DIR", None)
-        else:
-            os.environ["APP_RESOURCES_DIR"] = self.original_resources_dir
-
-    def test_get_model_file_reads_bundled_resource_directly(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            model_dir = Path(tmp) / "src-python" / "models"
-            model_dir.mkdir(parents=True)
-            expected = model_dir / "unit-test-model.bin"
-            expected.write_bytes(b"ok")
-            os.environ.pop("APP_MODEL_DIR", None)
-            os.environ["APP_RESOURCES_DIR"] = tmp
-
-            runtime = OmniVoiceRuntime()
-
-            self.assertEqual(Path(runtime._get_model_file("unit-test-model.bin")), expected)
-
-    def test_get_model_file_prefers_writable_app_model_cache(self):
-        with tempfile.TemporaryDirectory() as app_tmp, tempfile.TemporaryDirectory() as resource_tmp:
-            app_model_dir = Path(app_tmp) / "models"
-            resource_model_dir = Path(resource_tmp) / "src-python" / "models"
-            app_model_dir.mkdir(parents=True)
-            resource_model_dir.mkdir(parents=True)
-            expected = app_model_dir / "unit-test-model.bin"
-            expected.write_bytes(b"cache")
-            (resource_model_dir / "unit-test-model.bin").write_bytes(b"resource")
-            os.environ["APP_MODEL_DIR"] = str(app_model_dir)
-            os.environ["APP_RESOURCES_DIR"] = resource_tmp
-
-            runtime = OmniVoiceRuntime()
-
-            self.assertEqual(Path(runtime._get_model_file("unit-test-model.bin")), expected)
 
 
 if __name__ == "__main__":
