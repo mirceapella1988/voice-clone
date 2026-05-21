@@ -42,8 +42,7 @@
     "resources": {
       "../src-python/sidecar.py": "src-python/sidecar.py",
       "../src-python/omnivoice_runtime.py": "src-python/omnivoice_runtime.py",
-      "../src-python/requirements.txt": "src-python/requirements.txt",
-      "../src-python/models": "src-python/models"
+      "../src-python/requirements.txt": "src-python/requirements.txt"
     }
   }
 }
