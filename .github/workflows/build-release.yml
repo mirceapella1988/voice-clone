@@ -19,13 +19,8 @@ jobs:
         include:
           - platform: "macos-latest"
             args: "--target aarch64-apple-darwin"
-            windowsCuda: false
           - platform: "windows-latest"
             args: "--bundles nsis"
-            windowsCuda: false
-          - platform: "windows-latest"
-            args: "--bundles nsis"
-            windowsCuda: true
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -40,9 +35,9 @@ jobs:
         shell: bash
         run: |
           pip install -r src-python/requirements.txt
-          if [ "${{ matrix.windowsCuda }}" = "true" ]; then
+          if [ "${{ matrix.platform }}" = "windows-latest" ]; then
             pip uninstall -y onnxruntime
-            pip install onnxruntime-gpu nvidia-cuda-runtime-cu12 nvidia-cublas-cu12 nvidia-cufft-cu12 nvidia-cudnn-cu12
+            pip install onnxruntime-gpu
           fi
           pip install pyinstaller
           python - <<'PY'
@@ -65,58 +60,7 @@ jobs:
             --collect-data huggingface_hub
             --collect-all hf_xet
           )
-          if [ "${{ matrix.windowsCuda }}" = "true" ]; then
-            while IFS= read -r dll; do
-              dll="${dll//$'\r'/}"
-              if [ -z "$dll" ]; then
-                continue
-              fi
-              PYINSTALLER_ARGS+=(--add-binary "$dll;onnxruntime/capi")
-            done < <(python - <<'PY'
-          import site
-          from pathlib import Path
-
-          # Bundle the CUDA/cuDNN runtime DLLs required by onnxruntime-gpu so
-          # CUDA works on end-user machines without installing the CUDA Toolkit.
-          required_dlls = {
-              "cudart64_12.dll",
-              "cublas64_12.dll",
-              "cublasLt64_12.dll",
-              "cufft64_11.dll",
-              "cudnn64_9.dll",
-              "cudnn_ops64_9.dll",
-              "cudnn_cnn64_9.dll",
-              "cudnn_graph64_9.dll",
-              "cudnn_heuristic64_9.dll",
-              "cudnn_engines_runtime_compiled64_9.dll",
-              "cudnn_ext64_9.dll",
-              "cudnn_engines_tensor_ir64_9.dll",
-          }
-          roots = [
-              Path(base) / package / "bin"
-              for base in site.getsitepackages()
-              for package in (
-                  "nvidia/cuda_runtime",
-                  "nvidia/cublas",
-                  "nvidia/cufft",
-                  "nvidia/cudnn",
-              )
-          ]
-          found = set()
-          for root in roots:
-              if root.is_dir():
-                  for dll in sorted(root.glob("*.dll")):
-                      if dll.name in required_dlls:
-                          found.add(dll.name)
-                          print(dll)
-
-          missing = sorted(required_dlls - found)
-          if missing:
-              raise SystemExit(f"Missing required CUDA/cuDNN DLLs: {missing}")
-          PY
-            )
-            pyinstaller "${PYINSTALLER_ARGS[@]}" --name sidecar-x86_64-pc-windows-msvc src-python/sidecar.py
-          elif [ "${{ matrix.platform }}" = "windows-latest" ]; then
+          if [ "${{ matrix.platform }}" = "windows-latest" ]; then
             pyinstaller "${PYINSTALLER_ARGS[@]}" --name sidecar-x86_64-pc-windows-msvc src-python/sidecar.py
           else
             pyinstaller "${PYINSTALLER_ARGS[@]}" --name sidecar-aarch64-apple-darwin src-python/sidecar.py
@@ -150,18 +94,6 @@ jobs:
 
       - name: install frontend dependencies
         run: npm install
-
-      - name: Rename Windows CUDA bundle
-        if: matrix.windowsCuda == true
-        shell: bash
-        run: |
-          node - <<'NODE'
-          const fs = require('fs');
-          const configPath = 'src-tauri/tauri.conf.json';
-          const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-          config.productName = 'Voice Clone CUDA';
-          fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
-          NODE
 
       - name: Configure macOS signing
         if: matrix.platform == 'macos-latest'
@@ -221,7 +153,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Voice Clone v__VERSION__"
-          releaseBody: "Bản phát hành tự động cho Voice Clone. App downloads OmniVoice model files from Hugging Face on first load and caches them locally instead of bundling model files in the installer. Windows publishes a small CPU installer and a larger CUDA installer; use the CUDA build only on supported NVIDIA systems. macOS public distribution requires Apple Developer ID signing and notarization; otherwise the draft build is ad-hoc signed for internal testing."
+          releaseBody: "Bản phát hành tự động cho Voice Clone. App downloads OmniVoice model files from Hugging Face on first load and caches them locally instead of bundling model files in the installer. Windows ships one installer with ONNX Runtime GPU support: it uses CUDA when the machine has a compatible NVIDIA CUDA/cuDNN runtime available, and falls back to CPU otherwise. macOS public distribution requires Apple Developer ID signing and notarization; otherwise the draft build is ad-hoc signed for internal testing."
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
