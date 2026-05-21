@@ -1,5 +1,6 @@
 import importlib
 import os
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -47,6 +48,10 @@ def _get_int(params, key, default):
     if value is None or value == "":
         return int(default)
     return int(value)
+
+
+def default_model_cache_dir():
+    return str(Path.home() / ".voiceclone" / "models")
 
 
 def normalize_language_id(language_id):
@@ -168,7 +173,7 @@ class OmniVoiceRuntime:
         model_dir = os.environ.get("APP_MODEL_DIR")
         if model_dir:
             return model_dir
-        return os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+        return default_model_cache_dir()
 
     def _resolve_model_path(self):
         checkpoint = os.environ.get("OMNIVOICE_MODEL", MODEL_REPO)

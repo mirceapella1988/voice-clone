@@ -1,5 +1,6 @@
 import os
 import sys
+from pathlib import Path
 
 from huggingface_hub import snapshot_download
 
@@ -9,7 +10,7 @@ MODEL_REPO = "k2-fsa/OmniVoice"
 def main():
     cache_dir = os.environ.get(
         "APP_MODEL_DIR",
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "models"),
+        str(Path.home() / ".voiceclone" / "models"),
     )
     os.makedirs(cache_dir, exist_ok=True)
 

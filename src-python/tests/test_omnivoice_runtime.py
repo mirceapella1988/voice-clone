@@ -18,6 +18,7 @@ import omnivoice_runtime
 from omnivoice_runtime import (
     MODEL_REPO,
     OmniVoiceRuntime,
+    default_model_cache_dir,
     get_available_hardware_devices,
     normalize_language_id,
     to_mono_audio,
@@ -165,6 +166,13 @@ class RuntimeLoadTests(unittest.TestCase):
 
             self.assertEqual(runtime.actual_device, "cpu")
             self.assertEqual(FakeOmniVoice.load_kwargs["dtype"], fake_torch.float32)
+
+    def test_default_model_cache_dir_uses_voiceclone_home_directory(self):
+        with patch.object(omnivoice_runtime.Path, "home", return_value=Path("/Users/example")):
+            self.assertEqual(
+                default_model_cache_dir(),
+                str(Path("/Users/example/.voiceclone/models")),
+            )
 
 
 class RuntimeGenerateTests(unittest.TestCase):

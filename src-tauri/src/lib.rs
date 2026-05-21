@@ -30,6 +30,23 @@ fn is_usable_sidecar_candidate(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+fn voiceclone_model_dir_from_home(home_dir: PathBuf) -> PathBuf {
+    home_dir.join(".voiceclone").join("models")
+}
+
+fn resolve_voiceclone_model_dir() -> Result<PathBuf, String> {
+    let home_dir = if cfg!(target_os = "windows") {
+        std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))
+    } else {
+        std::env::var_os("HOME")
+    }
+    .map(PathBuf::from)
+    .filter(|path| !path.as_os_str().is_empty())
+    .ok_or_else(|| "Failed to resolve user home directory for .voiceclone model cache".to_string())?;
+
+    Ok(voiceclone_model_dir_from_home(home_dir))
+}
+
 fn emit_sidecar_message(app_handle: &tauri::AppHandle, event_type: &str, message: &str) {
     let payload = serde_json::json!({
         "type": event_type,
@@ -52,7 +69,7 @@ fn hide_subprocess_window(_command: &mut Command) {}
 
 #[cfg(test)]
 mod tests {
-    use super::{is_usable_sidecar_candidate, push_sidecar_candidate};
+    use super::{is_usable_sidecar_candidate, push_sidecar_candidate, voiceclone_model_dir_from_home};
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -99,6 +116,16 @@ mod tests {
         push_sidecar_candidate(&mut candidates, first.clone());
 
         assert_eq!(candidates, vec![first, second]);
+    }
+
+    #[test]
+    fn voiceclone_model_dir_uses_hidden_home_directory() {
+        let home = std::path::PathBuf::from("/Users/example");
+
+        assert_eq!(
+            voiceclone_model_dir_from_home(home),
+            std::path::PathBuf::from("/Users/example/.voiceclone/models")
+        );
     }
 }
 
@@ -219,18 +246,28 @@ pub fn run() {
             let sidecar_dir = sidecar_path.parent().map(|path| path.to_path_buf());
             let is_script = sidecar_path.extension().map_or(false, |ext| ext == "py");
             let resource_dir = app.path().resource_dir().ok();
-            let mut app_model_dir = app.path().app_data_dir().ok().map(|path| path.join("models"));
-            if let Some(dir) = app_model_dir.clone() {
-                if let Err(e) = std::fs::create_dir_all(dir) {
-                    let message = format!("Failed to create model cache directory: {e}");
+            let app_model_dir = match resolve_voiceclone_model_dir() {
+                Ok(dir) => {
+                    if let Err(e) = std::fs::create_dir_all(&dir) {
+                        let message = format!("Failed to create .voiceclone model cache directory: {e}");
+                        eprintln!("{message}");
+                        let _ = app.emit(
+                            "sidecar-event",
+                            serde_json::json!({"type":"error","message":message}).to_string(),
+                        );
+                        return Ok(());
+                    }
+                    Some(dir)
+                }
+                Err(message) => {
                     eprintln!("{message}");
                     let _ = app.emit(
                         "sidecar-event",
                         serde_json::json!({"type":"error","message":message}).to_string(),
                     );
-                    app_model_dir = None;
+                    return Ok(());
                 }
-            }
+            };
 
             let child_process = if !is_script {
                 // Chạy trực tiếp binary sidecar đóng gói
