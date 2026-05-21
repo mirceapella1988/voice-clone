@@ -115,6 +115,7 @@ export default function App() {
 
   // Offline Audio Context to decode reference wav files
   const audioContextRef = useRef<AudioContext | null>(null);
+  const generationInFlightRef = useRef(false);
 
   const appendLog = (msg: string) => {
     const cleanMessage = msg.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "").trim();
@@ -376,6 +377,7 @@ export default function App() {
             }
             appendLog(`${data.status}: ${p}%`);
           } else if (data.type === "complete") {
+            generationInFlightRef.current = false;
             appendLog("Inference completed successfully!");
             base64ToFloat32Array(data.audio_base64).then(({ audio, sampleRate }) => {
               setOutputAudioData(audio);
@@ -394,10 +396,12 @@ export default function App() {
             setGenerateProgress(100);
             setGenerateStatus("Hoàn thành");
           } else if (data.type === "stopped") {
+            generationInFlightRef.current = false;
             appendLog("Generation stopped.");
             setIsGenerating(false);
             setGenerateStatus("Đã ngắt");
           } else if (data.type === "error") {
+            generationInFlightRef.current = false;
             appendLog(`Sidecar Error: ${data.message}`);
             if (data.diagnostics) {
               setReferenceDiagnostics(data.diagnostics);
@@ -509,6 +513,11 @@ export default function App() {
   };
 
   const handleGenerate = async () => {
+    if (generationInFlightRef.current || isGenerating) {
+      appendLog("Generation request ignored because another request is already running.");
+      return;
+    }
+
     if (modelStatus !== "ready") {
       alert("Vui lòng tải mô hình trước khi thực hiện.");
       return;
@@ -530,6 +539,7 @@ export default function App() {
       return;
     }
 
+    generationInFlightRef.current = true;
     setIsGenerating(true);
     setGenerateProgress(0);
     setGenerateStatus("Đang xử lý âm thanh mẫu...");
@@ -571,6 +581,7 @@ export default function App() {
         msg: JSON.stringify(payload),
       });
     } catch (err: any) {
+      generationInFlightRef.current = false;
       appendLog(`Generation request failed: ${err.message || err}`);
       setIsGenerating(false);
     }

@@ -104,6 +104,13 @@ mod tests {
 
 #[tauri::command]
 fn send_to_sidecar(state: State<'_, SidecarState>, msg: String) -> Result<(), String> {
+    let msg = msg.trim();
+    if msg.is_empty() {
+        return Err("Refusing to send an empty command to Python sidecar".to_string());
+    }
+    serde_json::from_str::<serde_json::Value>(msg)
+        .map_err(|e| format!("Refusing to send invalid JSON to Python sidecar: {e}"))?;
+
     {
         let mut child_guard = state.child.lock().map_err(|e| e.to_string())?;
         if let Some(child) = child_guard.as_mut() {

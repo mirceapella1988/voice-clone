@@ -153,8 +153,17 @@ class SidecarApp:
             self.is_generating = False
 
     def handle_command(self, line):
+        line = line.strip()
+        if not line:
+            return
+
         try:
-            data = json.loads(line.strip())
+            data = json.loads(line)
+        except json.JSONDecodeError as e:
+            send_json({"type": "error", "message": f"Invalid JSON command: {str(e)}"})
+            return
+
+        try:
             cmd = data.get("command")
 
             if cmd == "load":
@@ -215,7 +224,7 @@ class SidecarApp:
                 send_json({"type": "error", "message": f"Unknown command: {cmd}"})
 
         except Exception as e:
-            send_json({"type": "error", "message": f"Invalid JSON command command: {str(e)}"})
+            send_json({"type": "error", "message": f"Failed to handle sidecar command: {str(e)}"})
 
     def main_loop(self):
         send_json({"type": "status", "status": "started"})

@@ -49,6 +49,20 @@ def _get_int(params, key, default):
     return int(value)
 
 
+def normalize_language_id(language_id):
+    value = str(language_id or "").strip()
+    if not value or value.lower() == "auto":
+        return None
+
+    if value.endswith(")") and "(" in value:
+        value = value.rsplit("(", 1)[1].rstrip(")").strip()
+
+    if len(value) <= 3 and value.replace("-", "").isalpha():
+        return value.lower()
+
+    return value
+
+
 def import_torch():
     return importlib.import_module("torch")
 
@@ -234,7 +248,7 @@ class OmniVoiceRuntime:
             raise ValueError("Text to synthesize is required.")
 
         language_id = params.get("language_id")
-        language = None if not language_id or language_id == "Auto" else language_id
+        language = normalize_language_id(language_id)
         ref_sample_rate = int(params.get("ref_sample_rate") or self.sampling_rate)
         preprocess_prompt = _get_bool(params, "preprocess_prompt", True)
         generation_config = self._make_generation_config(params)
@@ -252,7 +266,9 @@ class OmniVoiceRuntime:
             "denoise": bool(getattr(generation_config, "denoise", True)),
             "preprocess_prompt": preprocess_prompt,
             "postprocess_output": bool(getattr(generation_config, "postprocess_output", True)),
+            "raw_language_id": language_id,
             "language_id": language,
+            "target_text_chars": len(target_text),
             "speed": speed,
             "duration_override_seconds": duration,
             "ref_text_chars": len((ref_text or "").strip()),

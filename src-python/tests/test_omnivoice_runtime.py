@@ -1,5 +1,6 @@
 import base64
 import io
+import json
 import os
 import sys
 import tempfile
@@ -18,6 +19,7 @@ from omnivoice_runtime import (
     MODEL_REPO,
     OmniVoiceRuntime,
     get_available_hardware_devices,
+    normalize_language_id,
     to_mono_audio,
 )
 from sidecar import SidecarApp
@@ -240,6 +242,20 @@ class RuntimeGenerateTests(unittest.TestCase):
         self.assertEqual(runtime.model.generate_kwargs["duration"], 2.5)
         self.assertEqual(runtime.model.generate_kwargs["speed"], 0.8)
 
+    def test_generate_normalizes_language_labels_to_omnivoice_id(self):
+        runtime = self.make_loaded_runtime()
+
+        runtime.generate(
+            text="Xin chao",
+            ref_audio=np.zeros(24000, dtype=np.float32),
+            ref_text="hello",
+            params={"language_id": "Vietnamese (vi)"},
+        )
+
+        self.assertEqual(runtime.model.generate_kwargs["language"], "vi")
+        self.assertEqual(runtime.last_diagnostics["raw_language_id"], "Vietnamese (vi)")
+        self.assertEqual(runtime.last_diagnostics["language_id"], "vi")
+
     def test_generate_respects_cancel_before_prompt_creation(self):
         runtime = self.make_loaded_runtime()
 
@@ -270,6 +286,14 @@ class HardwareDetectionTests(unittest.TestCase):
         self.assertEqual(hardware["auto_detect"], "cpu")
         self.assertEqual([device["id"] for device in hardware["devices"]], ["cpu"])
         self.assertFalse(hardware["diagnostics"]["torch_available"])
+
+
+class LanguageNormalizationTests(unittest.TestCase):
+    def test_normalizes_auto_codes_and_display_labels(self):
+        self.assertIsNone(normalize_language_id("Auto"))
+        self.assertEqual(normalize_language_id("VI"), "vi")
+        self.assertEqual(normalize_language_id("Vietnamese (vi)"), "vi")
+        self.assertEqual(normalize_language_id("Vietnamese"), "Vietnamese")
 
 
 class AudioHelperTests(unittest.TestCase):
@@ -308,6 +332,27 @@ class SidecarReferenceAudioTests(unittest.TestCase):
         self.assertEqual(len(audio), 2)
         self.assertAlmostEqual(float(audio[0]), 0.0, places=5)
         self.assertAlmostEqual(float(audio[1]), 0.5, places=5)
+
+    def test_handle_command_ignores_blank_stdin_lines(self):
+        app = SidecarApp()
+        output = io.StringIO()
+
+        with patch("sys.stdout", output):
+            app.handle_command("   \n")
+
+        self.assertEqual(output.getvalue(), "")
+
+    def test_handle_command_reports_invalid_json_cleanly(self):
+        app = SidecarApp()
+        output = io.StringIO()
+
+        with patch("sys.stdout", output):
+            app.handle_command("not-json\n")
+
+        message = json.loads(output.getvalue())
+        self.assertEqual(message["type"], "error")
+        self.assertIn("Invalid JSON command:", message["message"])
+        self.assertNotIn("command command", message["message"])
 
 
 if __name__ == "__main__":
