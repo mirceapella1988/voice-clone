@@ -35,6 +35,10 @@ jobs:
         shell: bash
         run: |
           pip install -r src-python/requirements.txt
+          if [ "${{ matrix.platform }}" = "windows-latest" ]; then
+            pip uninstall -y onnxruntime
+            pip install onnxruntime-gpu nvidia-cuda-runtime-cu12 nvidia-cublas-cu12 nvidia-cufft-cu12 nvidia-cudnn-cu12
+          fi
           pip install pyinstaller
           python - <<'PY'
           import onnxruntime as ort
@@ -59,6 +63,55 @@ jobs:
             --hidden-import scipy.signal
           )
           if [ "${{ matrix.platform }}" = "windows-latest" ]; then
+            while IFS= read -r dll; do
+              dll="${dll//$'\r'/}"
+              if [ -z "$dll" ]; then
+                continue
+              fi
+              PYINSTALLER_ARGS+=(--add-binary "$dll;onnxruntime/capi")
+            done < <(python - <<'PY'
+          import site
+          from pathlib import Path
+
+          # Bundle the CUDA/cuDNN runtime DLLs required by onnxruntime-gpu so
+          # CUDA works on end-user machines without installing the CUDA Toolkit.
+          required_dlls = {
+              "cudart64_12.dll",
+              "cublas64_12.dll",
+              "cublasLt64_12.dll",
+              "cufft64_11.dll",
+              "cudnn64_9.dll",
+              "cudnn_ops64_9.dll",
+              "cudnn_cnn64_9.dll",
+              "cudnn_graph64_9.dll",
+              "cudnn_heuristic64_9.dll",
+              "cudnn_engines_runtime_compiled64_9.dll",
+              "cudnn_ext64_9.dll",
+              "cudnn_engines_tensor_ir64_9.dll",
+          }
+          roots = [
+              Path(base) / package / "bin"
+              for base in site.getsitepackages()
+              for package in (
+                  "nvidia/cuda_runtime",
+                  "nvidia/cublas",
+                  "nvidia/cufft",
+                  "nvidia/cudnn",
+              )
+          ]
+          found = set()
+          for root in roots:
+              if root.is_dir():
+                  for dll in sorted(root.glob("*.dll")):
+                      if dll.name in required_dlls:
+                          found.add(dll.name)
+                          print(dll)
+
+          missing = sorted(required_dlls - found)
+          if missing:
+              raise SystemExit(f"Missing required CUDA/cuDNN DLLs: {missing}")
+          PY
+            )
             pyinstaller "${PYINSTALLER_ARGS[@]}" --name sidecar-x86_64-pc-windows-msvc src-python/sidecar.py
           else
             pyinstaller "${PYINSTALLER_ARGS[@]}" --name sidecar-aarch64-apple-darwin src-python/sidecar.py
@@ -151,7 +204,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Voice Clone v__VERSION__"
-          releaseBody: "Bản phát hành tự động cho Voice Clone. App downloads OmniVoice model files from Hugging Face on first load and caches them locally instead of bundling model files in the installer. Windows release uses CPU-only ONNX Runtime to keep build time and installer size reasonable. macOS public distribution requires Apple Developer ID signing and notarization; otherwise the draft build is ad-hoc signed for internal testing."
+          releaseBody: "Bản phát hành tự động cho Voice Clone. App downloads OmniVoice model files from Hugging Face on first load and caches them locally instead of bundling model files in the installer. Windows build bundles ONNX Runtime GPU plus CUDA/cuDNN runtime DLLs so CUDA can be selected on supported NVIDIA systems. macOS public distribution requires Apple Developer ID signing and notarization; otherwise the draft build is ad-hoc signed for internal testing."
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
