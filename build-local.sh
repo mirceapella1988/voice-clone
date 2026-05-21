@@ -38,11 +38,14 @@ PYINSTALLER="python3 -m PyInstaller"
 # ── [2/4] Build Python sidecar ────────────────────────────────────────────
 log "[2/4] Building Python sidecar with PyInstaller..."
 mkdir -p src-tauri/binaries
+rm -rf build
+rm -f "sidecar-${TARGET_TRIPLE}.spec"
 
 $PYINSTALLER \
     --clean -y \
     --onefile \
     --distpath src-tauri/binaries \
+    --specpath build/spec \
     --collect-all omnivoice \
     --collect-all torch \
     --collect-all torchaudio \

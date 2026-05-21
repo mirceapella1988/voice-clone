@@ -41,11 +41,14 @@ ok "Python dependencies installed"
 # ── [2/4] Build Python sidecar ────────────────────────────────────────────
 log "[2/4] Building Python sidecar with PyInstaller..."
 New-Item -ItemType Directory -Force -Path "src-tauri/binaries" | Out-Null
+Remove-Item -Recurse -Force "build" -ErrorAction SilentlyContinue
+Remove-Item -Force "sidecar-x86_64-pc-windows-msvc.spec" -ErrorAction SilentlyContinue
 
 $pyinstallerArgs = @(
     "--clean", "-y",
     "--onefile",
     "--distpath", "src-tauri/binaries",
+    "--specpath", "build/spec",
     "--collect-all", "omnivoice",
     "--collect-all", "torch",
     "--collect-all", "torchaudio",
