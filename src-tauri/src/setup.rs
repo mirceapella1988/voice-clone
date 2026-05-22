@@ -13,8 +13,8 @@ const PYTHON_WINDOWS_URL: &str =
     "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip";
 const GET_PIP_URL: &str = "https://bootstrap.pypa.io/get-pip.py";
 const FFMPEG_WINDOWS_URL: &str = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip";
-const PYTHON_MACOS_AARCH64_URL: &str = "https://github.com/indygreg/python-build-standalone/releases/download/20240107/cpython-3.11.9+20240107-aarch64-apple-darwin-install_only.tar.gz";
-const PYTHON_MACOS_X86_64_URL: &str = "https://github.com/indygreg/python-build-standalone/releases/download/20240107/cpython-3.11.9+20240107-x86_64-apple-darwin-install_only.tar.gz";
+const PYTHON_MACOS_AARCH64_URL: &str = "https://github.com/astral-sh/python-build-standalone/releases/download/20240713/cpython-3.11.9%2B20240713-aarch64-apple-darwin-install_only.tar.gz";
+const PYTHON_MACOS_X86_64_URL: &str = "https://github.com/astral-sh/python-build-standalone/releases/download/20240713/cpython-3.11.9%2B20240713-x86_64-apple-darwin-install_only.tar.gz";
 const FFMPEG_MACOS_URL: &str = "https://evermeet.cx/ffmpeg/ffmpeg-6.1.zip";
 const DOWNLOAD_RETRIES: usize = 3;
 
