@@ -82,7 +82,11 @@ def _get_int(params, key, default):
 
 
 def default_model_cache_dir():
-    return str(Path.home() / ".voiceclone" / "models")
+    if os.name == "nt":
+        root = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+        if root:
+            return str(Path(root) / "Voice Clone" / "models")
+    return str(Path.home() / "Library" / "Application Support" / "Voice Clone" / "models")
 
 
 def normalize_language_id(language_id):

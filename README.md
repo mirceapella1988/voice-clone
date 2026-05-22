@@ -6,17 +6,17 @@ Tauri desktop app for zero-shot voice cloning with [OmniVoice](https://huggingfa
 
 - Voice Clone supports Windows and macOS.
 - Installers do not bundle a PyInstaller sidecar, Python runtime, PyTorch runtime, FFmpeg binary, or OmniVoice model weights.
-- On first launch, the app installs runtime assets automatically into the user's home directory:
+- On first launch, the app installs runtime assets automatically into the app local data directory:
 
-| Platform | Runtime root | Model cache |
+| Platform | Runtime root | Folder cache |
 | --- | --- | --- |
-| macOS | `~/.voiceclone/runtime` | `~/.voiceclone/models` |
-| Windows | `%USERPROFILE%\.voiceclone\runtime` | `%USERPROFILE%\.voiceclone\models` |
+| macOS | `~/Library/Application Support/Voice Clone/runtime` | `~/Library/Application Support/Voice Clone/models` |
+| Windows | `%LOCALAPPDATA%\Voice Clone\runtime` | `%LOCALAPPDATA%\Voice Clone\models` |
 
 Runtime layout:
 
 ```text
-.voiceclone/
+Voice Clone/
   runtime/
     python/
     ffmpeg/
@@ -38,7 +38,7 @@ Run the Tauri dev app:
 npm run tauri dev
 ```
 
-The dev app uses `src-python/sidecar.py` and the runtime installed in `~/.voiceclone`. If runtime packages are missing, the setup screen installs them before the main UI loads.
+The dev app uses `src-python/sidecar.py` and the runtime installed in the app local data directory. If runtime packages are missing, the setup screen installs them before the main UI loads.
 
 ## Local Packaged Builds
 
@@ -111,11 +111,11 @@ The Tauri action creates a draft GitHub Release for the tag. Review the generate
 
 ### First launch is slow
 
-This is expected. The app installs Python, FFmpeg, PyTorch, and voice-cloning packages into `~/.voiceclone/runtime`.
+This is expected. The app installs Python, FFmpeg, PyTorch, and voice-cloning packages into the app local data runtime folder.
 
 ### First model load is slow
 
-This is expected. The app downloads `k2-fsa/OmniVoice` to `~/.voiceclone/models` the first time the user loads the model.
+This is expected. The app downloads `k2-fsa/OmniVoice` to the app local data `models` folder the first time the user loads the model.
 
 ### macOS app is blocked by Gatekeeper
 

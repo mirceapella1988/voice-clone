@@ -8,9 +8,9 @@ interface SetupScreenProps {
 const formatRuntimePath = (modelsPath?: string) => {
   if (modelsPath) return modelsPath;
   if (navigator.platform.toLowerCase().includes("win")) {
-    return "%USERPROFILE%\\.voiceclone\\models";
+    return "%LOCALAPPDATA%\\Voice Clone\\models";
   }
-  return "~/.voiceclone/models";
+  return "~/Library/Application Support/Voice Clone/models";
 };
 
 export function SetupScreen({ setup }: SetupScreenProps) {

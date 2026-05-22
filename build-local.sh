@@ -31,4 +31,4 @@ echo ""
 echo "Build complete."
 find src-tauri/target/*/release/bundle -name "*.dmg" -o -name "*.app" 2>/dev/null | head -5 || true
 echo ""
-echo "Runtime note: Python, FFmpeg, PyTorch, and models are installed automatically on first app launch into ~/.voiceclone."
+echo "Runtime note: Python, FFmpeg, PyTorch, and models are installed automatically on first app launch into the app local data folder."

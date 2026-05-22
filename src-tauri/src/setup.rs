@@ -4,7 +4,7 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tar::Archive;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use zip::ZipArchive;
@@ -33,17 +33,12 @@ struct InstallProgress {
     percent: u8,
 }
 
-pub fn get_base_dir() -> Result<PathBuf, String> {
-    let home = if cfg!(target_os = "windows") {
-        std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))
-    } else {
-        std::env::var_os("HOME")
-    }
-    .map(PathBuf::from)
-    .filter(|path| !path.as_os_str().is_empty())
-    .ok_or_else(|| "Failed to resolve user home directory".to_string())?;
-
-    Ok(home.join(".voiceclone"))
+pub fn get_base_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    app_handle
+        .path()
+        .app_local_data_dir()
+        .or_else(|_| app_handle.path().app_data_dir())
+        .map_err(|e| format!("Failed to resolve app local data directory: {e}"))
 }
 
 pub fn models_dir(base: &Path) -> PathBuf {
@@ -87,8 +82,8 @@ pub fn torch_dir(base: &Path) -> PathBuf {
 }
 
 #[tauri::command]
-pub async fn check_runtime() -> Result<RuntimeStatus, String> {
-    let base = get_base_dir()?;
+pub async fn check_runtime(app_handle: tauri::AppHandle) -> Result<RuntimeStatus, String> {
+    let base = get_base_dir(&app_handle)?;
     let models = models_dir(&base);
 
     Ok(RuntimeStatus {
@@ -134,7 +129,7 @@ pub async fn install_runtime(app_handle: tauri::AppHandle, gpu: String) -> Resul
         return Err("Voice Clone runtime installation supports Windows and macOS only".to_string());
     }
 
-    let base = get_base_dir()?;
+    let base = get_base_dir(&app_handle)?;
     let runtime = base.join("runtime");
     let python_dir = runtime.join("python");
     let ffmpeg = ffmpeg_dir(&base);
@@ -149,7 +144,7 @@ pub async fn install_runtime(app_handle: tauri::AppHandle, gpu: String) -> Resul
         .map_err(|e| format!("Failed to create FFmpeg runtime directory: {e}"))?;
     tokio::fs::create_dir_all(&models)
         .await
-        .map_err(|e| format!("Failed to create model cache directory: {e}"))?;
+        .map_err(|e| format!("Failed to create folder cache directory: {e}"))?;
     tokio::fs::create_dir_all(&downloads)
         .await
         .map_err(|e| format!("Failed to create downloads directory: {e}"))?;
@@ -620,8 +615,8 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn runtime_paths_use_voiceclone_root() {
-        let base = PathBuf::from("/Users/example/.voiceclone");
+    fn runtime_paths_use_app_local_data_root() {
+        let base = PathBuf::from("/Users/example/Library/Application Support/Voice Clone");
 
         if cfg!(target_os = "windows") {
             assert_eq!(python_path(&base), base.join("runtime/python/python.exe"));
@@ -634,7 +629,7 @@ mod tests {
 
     #[test]
     fn torch_detection_path_targets_site_packages() {
-        let base = PathBuf::from("/Users/example/.voiceclone");
+        let base = PathBuf::from("/Users/example/Library/Application Support/Voice Clone");
         let torch = torch_dir(&base).to_string_lossy().replace('\\', "/");
 
         assert!(torch.ends_with("site-packages/torch"));

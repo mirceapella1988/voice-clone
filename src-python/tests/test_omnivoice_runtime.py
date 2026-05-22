@@ -181,7 +181,7 @@ class RuntimeLoadTests(unittest.TestCase):
         with patch.object(omnivoice_runtime.Path, "home", return_value=Path("/Users/example")):
             self.assertEqual(
                 default_model_cache_dir(),
-                str(Path("/Users/example/.voiceclone/models")),
+                str(Path("/Users/example/Library/Application Support/Voice Clone/models")),
             )
 
     def test_voiceclone_models_env_takes_precedence_over_legacy_app_model_dir(self):

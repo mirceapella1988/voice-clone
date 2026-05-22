@@ -77,7 +77,7 @@ fn spawn_runtime_sidecar(app_handle: &tauri::AppHandle, state: &SidecarState) ->
         return Ok(());
     }
 
-    let base = setup::get_base_dir()?;
+    let base = setup::get_base_dir(app_handle)?;
     let python = setup::python_path(&base);
     let ffmpeg_dir = setup::ffmpeg_dir(&base);
     let models_dir = setup::models_dir(&base);
@@ -94,7 +94,7 @@ fn spawn_runtime_sidecar(app_handle: &tauri::AppHandle, state: &SidecarState) ->
     }
 
     std::fs::create_dir_all(&models_dir)
-        .map_err(|e| format!("Failed to create model cache directory {}: {e}", models_dir.display()))?;
+        .map_err(|e| format!("Failed to create folder cache directory {}: {e}", models_dir.display()))?;
 
     let mut command = Command::new(&python);
     command

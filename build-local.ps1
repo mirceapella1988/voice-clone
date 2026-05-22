@@ -21,4 +21,4 @@ if ($LASTEXITCODE -ne 0) { err "Tauri build failed." }
 
 Write-Host ""
 Write-Host "Build complete."
-Write-Host "Runtime note: Python, FFmpeg, PyTorch, and models are installed automatically on first app launch into %USERPROFILE%\.voiceclone."
+Write-Host "Runtime note: Python, FFmpeg, PyTorch, and models are installed automatically on first app launch into %LOCALAPPDATA%\Voice Clone."
