@@ -15,7 +15,11 @@ const GET_PIP_URL: &str = "https://bootstrap.pypa.io/get-pip.py";
 const FFMPEG_WINDOWS_URL: &str = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip";
 const PYTHON_MACOS_AARCH64_URL: &str = "https://github.com/astral-sh/python-build-standalone/releases/download/20240713/cpython-3.11.9%2B20240713-aarch64-apple-darwin-install_only.tar.gz";
 const PYTHON_MACOS_X86_64_URL: &str = "https://github.com/astral-sh/python-build-standalone/releases/download/20240713/cpython-3.11.9%2B20240713-x86_64-apple-darwin-install_only.tar.gz";
-const FFMPEG_MACOS_URL: &str = "https://evermeet.cx/ffmpeg/ffmpeg-6.1.zip";
+const FFMPEG_MACOS_URLS: &[&str] = &[
+    // ffmpeg.org/download.html links macOS static builds to evermeet.cx.
+    "https://evermeet.cx/ffmpeg/ffmpeg-8.1.1.zip",
+    "https://deolaha.ca/pub/ffmpeg/ffmpeg-8.1.1.zip",
+];
 const DOWNLOAD_RETRIES: usize = 3;
 
 #[derive(Debug, Serialize)]
@@ -278,9 +282,9 @@ async fn install_macos_runtime(
     run_command(app_handle, &python, &["-m", "ensurepip"], None).await?;
 
     let ffmpeg_zip = downloads.join("ffmpeg-macos.zip");
-    download_with_retry(
+    download_with_retry_from_urls(
         app_handle,
-        FFMPEG_MACOS_URL,
+        FFMPEG_MACOS_URLS,
         &ffmpeg_zip,
         "Downloading FFmpeg...",
         30,
@@ -366,6 +370,7 @@ async fn download_with_retry(
     end_percent: u8,
 ) -> Result<(), String> {
     let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(20))
         .timeout(Duration::from_secs(1800))
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
@@ -394,6 +399,38 @@ async fn download_with_retry(
     }
 
     Err(last_error.unwrap_or_else(|| format!("Failed to download {url}")))
+}
+
+async fn download_with_retry_from_urls(
+    app_handle: &tauri::AppHandle,
+    urls: &[&str],
+    dest: &Path,
+    message: &str,
+    start_percent: u8,
+    end_percent: u8,
+) -> Result<(), String> {
+    let mut last_error = None;
+
+    for (index, url) in urls.iter().enumerate() {
+        if index > 0 {
+            emit_progress(
+                app_handle,
+                "download",
+                &format!("{message} switching mirror..."),
+                start_percent,
+            );
+        }
+
+        match download_with_retry(app_handle, url, dest, message, start_percent, end_percent).await {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                last_error = Some(error);
+                let _ = tokio::fs::remove_file(dest).await;
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| format!("Failed to download from {}", urls.join(", "))))
 }
 
 async fn download_once(
