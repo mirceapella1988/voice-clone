@@ -99,10 +99,16 @@ Build:
 powershell -ExecutionPolicy Bypass -File build-local.ps1
 ```
 
+To force packaging with PyTorch CUDA wheels (useful for CI/build servers without a local NVIDIA GPU):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File build-local.ps1 -ForceCuda
+```
+
 What the script does:
 
 1. Installs Python dependencies from `src-python/requirements.txt`.
-2. If NVIDIA/CUDA is detected, replaces PyTorch with CUDA wheels.
+2. If NVIDIA/CUDA is detected (or `-ForceCuda` is passed), replaces PyTorch with CUDA wheels.
 3. Builds the Python sidecar with PyInstaller into `src-tauri/binaries/`.
 4. Verifies OmniVoice model files are not bundled.
 5. Runs `npm run tauri build`.
@@ -137,8 +143,8 @@ Both jobs build a PyInstaller sidecar first, assert that model files are not bun
 Push a version tag:
 
 ```bash
-git tag -a v0.4.3 -m "Release v0.4.3"
-git push origin v0.4.3
+git tag -a v0.4.5 -m "Release v0.4.5"
+git push origin v0.4.5
 ```
 
 Or run **Build & Release** manually from the GitHub Actions UI.
@@ -195,7 +201,7 @@ The GitLab pipeline is tag/manual only so normal pushes do not spend runner minu
    - `npm run build -- --clearScreen false`
    - `cd src-tauri && cargo test`
 3. Commit the version and source changes.
-4. Create and push a tag like `v0.4.3`.
+4. Create and push a tag like `v0.4.5`.
 5. Let GitHub Actions build the installers, or use local scripts if GitHub-hosted runners are unavailable.
 
 ## Troubleshooting

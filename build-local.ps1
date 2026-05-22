@@ -2,6 +2,10 @@
 # build-local.ps1 — Local Windows build (no certificate required)
 # Usage: Right-click → Run with PowerShell, or: powershell -ExecutionPolicy Bypass -File build-local.ps1
 # =============================================================================
+param(
+    [switch]$ForceCuda
+)
+
 $ErrorActionPreference = "Stop"
 
 function log  { param($msg) Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $msg" -ForegroundColor Cyan }
@@ -21,21 +25,27 @@ log "[1/4] Installing Python dependencies..."
 
 # Detect CUDA availability. The base requirements install CPU/MPS wheels; NVIDIA
 # Windows builds override PyTorch with CUDA wheels before packaging.
-$hasCuda = $false
-$nvidiaSmi = Get-Command "nvidia-smi" -ErrorAction SilentlyContinue
-if ($nvidiaSmi) {
-    $cudaVer = & nvidia-smi 2>&1 | Select-String "CUDA Version"
-    if ($cudaVer) {
-        warn "NVIDIA GPU detected. PyTorch CUDA wheels will be installed."
-        $hasCuda = $true
+$hasCuda = $ForceCuda
+if (-not $hasCuda) {
+    $nvidiaSmi = Get-Command "nvidia-smi" -ErrorAction SilentlyContinue
+    if ($nvidiaSmi) {
+        $cudaVer = & nvidia-smi 2>&1 | Select-String "CUDA Version"
+        if ($cudaVer) {
+            warn "NVIDIA GPU detected. PyTorch CUDA wheels will be installed."
+            $hasCuda = $true
+        }
     }
 }
 
 pip install -q -r src-python/requirements.txt
+if ($LASTEXITCODE -ne 0) { err "Failed to install Python requirements." }
+
 if ($hasCuda) {
     pip install -q --force-reinstall --index-url https://download.pytorch.org/whl/cu128 torch==2.8.0+cu128 torchaudio==2.8.0+cu128
+    if ($LASTEXITCODE -ne 0) { err "Failed to install CUDA PyTorch packages." }
 }
 pip install -q pyinstaller
+if ($LASTEXITCODE -ne 0) { err "Failed to install PyInstaller." }
 ok "Python dependencies installed"
 
 # ── [2/4] Build Python sidecar ────────────────────────────────────────────
@@ -66,6 +76,7 @@ $pyinstallerArgs = @(
 )
 
 & pyinstaller @pyinstallerArgs
+if ($LASTEXITCODE -ne 0) { err "PyInstaller build failed." }
 ok "Sidecar built: src-tauri/binaries/sidecar-x86_64-pc-windows-msvc.exe"
 
 # ── [3/4] Model bundle policy ──────────────────────────────────────────────
@@ -78,7 +89,9 @@ if (Test-Path "src-python/models") {
 # ── [4/4] Build Tauri app ─────────────────────────────────────────────────
 log "[4/4] Building Tauri app (MSI + NSIS)..."
 npm install --silent
+if ($LASTEXITCODE -ne 0) { err "npm install failed." }
 npm run tauri build
+if ($LASTEXITCODE -ne 0) { err "Tauri build failed." }
 
 Write-Host "`n" -NoNewline
 ok "Build complete!"

@@ -114,11 +114,15 @@ def get_available_hardware_devices(torch_loader=import_torch):
 
     try:
         torch_module = torch_loader()
-    except Exception:
+    except Exception as e:
+        import traceback
+        import sys
+        print(f"Error loading torch: {e}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
         return {
             "devices": devices,
             "auto_detect": auto_detect,
-            "diagnostics": {"torch_available": False},
+            "diagnostics": {"torch_available": False, "error": str(e)},
         }
 
     if getattr(torch_module, "cuda", None) and torch_module.cuda.is_available():
@@ -158,6 +162,10 @@ class OmniVoiceRuntime:
             torch_module = import_torch()
             omnivoice_module = importlib.import_module("omnivoice")
         except ImportError as exc:
+            import traceback
+            import sys
+            print(f"Error loading modules: {exc}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
             raise OmniVoiceDependencyError(
                 "Missing OmniVoice PyTorch dependencies. Run `pip install -r src-python/requirements.txt`."
             ) from exc
