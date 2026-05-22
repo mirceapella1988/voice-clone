@@ -6,7 +6,10 @@ import io
 import wave
 import threading
 import traceback
+from pathlib import Path
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from omnivoice_runtime import OmniVoiceRuntime, OmniVoiceValidationError, get_available_hardware_devices
 

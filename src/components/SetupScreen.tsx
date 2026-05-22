@@ -18,14 +18,14 @@ export function SetupScreen({ setup }: SetupScreenProps) {
   const isChecking = setup.status === "checking";
   const message = isError
     ? setup.error
-    : setup.progress.message || "Đang chuẩn bị môi trường chạy lần đầu...";
+    : setup.progress.message || "Preparing the runtime for first launch...";
   const percent = isChecking ? 0 : setup.progress.percent;
 
   return (
     <div className="setup-fullscreen-bg">
       <section className={`setup-glass-card setup-runtime-card${isError ? " error-card" : ""}`}>
         <img className={`setup-logo${isError ? "" : " pulse"}`} src={voiceCloneIcon} alt="Voice Clone" />
-        <h2>{isError ? "Không thể chuẩn bị Runtime" : "Đang chuẩn bị môi trường chạy lần đầu..."}</h2>
+        <h2>{isError ? "Unable to prepare runtime" : "Preparing runtime for first launch..."}</h2>
         <p className="setup-runtime-message">{message}</p>
 
         {!isError && (
@@ -41,7 +41,7 @@ export function SetupScreen({ setup }: SetupScreenProps) {
         )}
 
         <div className="setup-runtime-path">
-          <span>Model cache</span>
+          <span>Folder cache</span>
           <code>{formatRuntimePath(setup.runtime?.models_path)}</code>
         </div>
 
@@ -51,7 +51,7 @@ export function SetupScreen({ setup }: SetupScreenProps) {
 
         {isError && (
           <button className="btn-primary" onClick={setup.retry}>
-            Thử lại
+            Retry
           </button>
         )}
       </section>

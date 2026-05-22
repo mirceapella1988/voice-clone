@@ -29,7 +29,7 @@ export interface SetupState {
 
 const initialProgress: SetupProgress = {
   stage: "checking",
-  message: "Đang kiểm tra cấu hình môi trường...",
+  message: "Checking runtime environment...",
   percent: 0,
 };
 
@@ -40,7 +40,7 @@ const parseProgressPayload = (payload: unknown): SetupProgress | null => {
 
   return {
     stage: String(value.stage || "installing"),
-    message: String(value.message || "Đang chuẩn bị môi trường chạy lần đầu..."),
+    message: String(value.message || "Preparing the runtime for first launch..."),
     percent: Math.max(0, Math.min(100, Number(value.percent || 0))),
   };
 };
@@ -96,7 +96,7 @@ export function useSetup(appendLog?: (message: string) => void): SetupState {
           try {
             const data = typeof event.payload === "string" ? JSON.parse(event.payload) : event.payload;
             if (data?.models_path) {
-              appendLogRef.current?.(`Model cache ready at ${data.models_path}`);
+              appendLogRef.current?.(`Folder cache ready at ${data.models_path}`);
             }
           } catch {
             appendLogRef.current?.("Runtime installation completed.");
@@ -111,7 +111,7 @@ export function useSetup(appendLog?: (message: string) => void): SetupState {
           setStatus("installing");
           setProgress({
             stage: "detecting",
-            message: "Đang phát hiện GPU và chuẩn bị cài đặt runtime...",
+            message: "Detecting GPU and preparing runtime installation...",
             percent: 1,
           });
           const detectedGpu = await invoke<string>("get_gpu_type");
@@ -134,7 +134,7 @@ export function useSetup(appendLog?: (message: string) => void): SetupState {
         setStatus("starting");
         setProgress({
           stage: "starting",
-          message: "Đang khởi động Python runtime...",
+          message: "Starting Python runtime...",
           percent: 100,
         });
         await invoke("start_runtime_sidecar");

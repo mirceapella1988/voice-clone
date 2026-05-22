@@ -111,6 +111,7 @@ fn spawn_runtime_sidecar(app_handle: &tauri::AppHandle, state: &SidecarState) ->
 
     if let Some(script_dir) = sidecar_script.parent() {
         command.current_dir(script_dir);
+        command.env("PYTHONPATH", script_dir);
     }
     if let Ok(resource_dir) = app_handle.path().resource_dir() {
         command.env("APP_RESOURCES_DIR", resource_dir);
