@@ -629,18 +629,18 @@ async fn fix_windows_python_pth(python_dir: &Path) -> Result<(), String> {
         .map_err(|e| format!("Failed to update {}: {e}", pth_path.display()))
 }
 
-async fn chmod_executable(path: &Path) -> Result<(), String> {
+async fn chmod_executable(_path: &Path) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let metadata = tokio::fs::metadata(path)
+        let metadata = tokio::fs::metadata(_path)
             .await
-            .map_err(|e| format!("Failed to read permissions for {}: {e}", path.display()))?;
+            .map_err(|e| format!("Failed to read permissions for {}: {e}", _path.display()))?;
         let mut permissions = metadata.permissions();
         permissions.set_mode(0o755);
-        tokio::fs::set_permissions(path, permissions)
+        tokio::fs::set_permissions(_path, permissions)
             .await
-            .map_err(|e| format!("Failed to chmod {}: {e}", path.display()))?;
+            .map_err(|e| format!("Failed to chmod {}: {e}", _path.display()))?;
     }
     Ok(())
 }
@@ -662,7 +662,6 @@ async fn run_command(
 
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         command.creation_flags(CREATE_NO_WINDOW);
     }

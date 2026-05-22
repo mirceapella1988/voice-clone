@@ -85,8 +85,8 @@ Release jobs build the Tauri installers only. They assert that `externalBin`, Py
 Trigger a GitHub release build:
 
 ```bash
-git tag -a v0.4.11 -m "Release v0.4.11"
-git push origin v0.4.11
+git tag -a v0.4.12 -m "Release v0.4.12"
+git push origin v0.4.12
 ```
 
 The Tauri action creates a draft GitHub Release for the tag. Review the generated installers before publishing the release.
@@ -104,7 +104,7 @@ The Tauri action creates a draft GitHub Release for the tag. Review the generate
    - `npm run build -- --clearScreen false`
    - `cd src-tauri && cargo test`
 3. Commit the version and source changes.
-4. Create and push a tag like `v0.4.11`.
+4. Create and push a tag like `v0.4.12`.
 5. Let GitHub Actions build the installers.
 
 ## Troubleshooting
