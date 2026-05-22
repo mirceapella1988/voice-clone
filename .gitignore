@@ -26,22 +26,12 @@ dist-ssr
 # Heavy models
 src-python/models/
 
-# PyInstaller & Tauri Binaries
+# Runtime artifacts
 build/
 dist/
 *.spec
 src-tauri/binaries/*
-!src-tauri/binaries/sidecar-aarch64-apple-darwin
-!src-tauri/binaries/sidecar-x86_64-apple-darwin
-!src-tauri/binaries/sidecar-x86_64-pc-windows-msvc.exe
-
+.voiceclone/
 
 # Custom ignore
 new-update.md
-src-tauri/binaries/sidecar-aarch64-apple-darwin/ffmpeg
-src-tauri/binaries/sidecar-aarch64-apple-darwin/sidecar-aarch64-apple-darwin
-src-tauri/binaries/sidecar-x86_64-apple-darwin/ffmpeg
-src-tauri/binaries/sidecar-x86_64-apple-darwin/sidecar-x86_64-apple-darwin
-src-tauri/binaries/sidecar-x86_64-pc-windows-msvc/ffmpeg.exe
-src-tauri/binaries/sidecar-x86_64-pc-windows-msvc/sidecar-x86_64-pc-windows-msvc.exe
-

@@ -33,9 +33,6 @@ macos_build:
       if ! command -v node >/dev/null 2>&1; then
         brew install node
       fi
-      if ! command -v python3 >/dev/null 2>&1; then
-        brew install python
-      fi
       if ! command -v cargo >/dev/null 2>&1; then
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
         . "$HOME/.cargo/env"
@@ -48,7 +45,6 @@ macos_build:
     expire_in: 30 days
     when: always
     paths:
-      - src-tauri/binaries/sidecar-aarch64-apple-darwin
       - src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
       - src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app
 
@@ -65,9 +61,6 @@ windows_build:
         throw "Chocolatey is required on the Windows runner. Use GitLab shared-windows or install Chocolatey on a self-hosted runner."
       }
 
-      if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
-        choco install -y python --no-progress
-      }
       if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
         choco install -y nodejs-lts --no-progress
       }
@@ -91,9 +84,8 @@ windows_build:
     expire_in: 30 days
     when: always
     paths:
-      - src-tauri/target/release/VoiceClone-Portable.zip
-      - src-tauri/target/release/VoiceClone-Portable-Light.zip
-      - src-tauri/target/release/VoiceClone-Sidecar-Windows.zip
+      - src-tauri/target/release/bundle/nsis/*.exe
+      - src-tauri/target/release/bundle/msi/*.msi
 
 gitlab_release:
   stage: release
@@ -115,7 +107,7 @@ gitlab_release:
       version="${CI_COMMIT_TAG#v}"
       package_name="voice-clone"
       files_list="$(mktemp)"
-      find src-tauri/target -type f \( -name "*.dmg" -o -name "*.zip" \) 2>/dev/null | sort -u > "$files_list"
+      find src-tauri/target -type f \( -name "*.dmg" -o -name "*.exe" -o -name "*.msi" \) 2>/dev/null | sort -u > "$files_list"
 
       if [ ! -s "$files_list" ]; then
         echo "No release installers found in build artifacts."
@@ -125,7 +117,7 @@ gitlab_release:
       release_payload="$(jq -n \
         --arg name "Voice Clone ${CI_COMMIT_TAG}" \
         --arg tag_name "$CI_COMMIT_TAG" \
-        --arg description "Manual GitLab release for Voice Clone ${CI_COMMIT_TAG}. Installers do not bundle OmniVoice models; users download k2-fsa/OmniVoice on first model load." \
+        --arg description "Manual GitLab release for Voice Clone ${CI_COMMIT_TAG}. Installers do not bundle PyInstaller sidecars, runtime binaries, or OmniVoice models; runtime assets install automatically on first launch." \
         '{name: $name, tag_name: $tag_name, description: $description}')"
 
       curl --fail --request POST \

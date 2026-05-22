@@ -120,10 +120,16 @@ class FakeOmniVoice:
 
 class RuntimeLoadTests(unittest.TestCase):
     def setUp(self):
+        self.original_voiceclone_models = os.environ.get("VOICECLONE_MODELS")
         self.original_app_model_dir = os.environ.get("APP_MODEL_DIR")
         self.original_omnivoice_model = os.environ.get("OMNIVOICE_MODEL")
 
     def tearDown(self):
+        if self.original_voiceclone_models is None:
+            os.environ.pop("VOICECLONE_MODELS", None)
+        else:
+            os.environ["VOICECLONE_MODELS"] = self.original_voiceclone_models
+
         if self.original_app_model_dir is None:
             os.environ.pop("APP_MODEL_DIR", None)
         else:
@@ -177,6 +183,14 @@ class RuntimeLoadTests(unittest.TestCase):
                 default_model_cache_dir(),
                 str(Path("/Users/example/.voiceclone/models")),
             )
+
+    def test_voiceclone_models_env_takes_precedence_over_legacy_app_model_dir(self):
+        os.environ["VOICECLONE_MODELS"] = "/tmp/voiceclone-models"
+        os.environ["APP_MODEL_DIR"] = "/tmp/legacy-models"
+
+        runtime = OmniVoiceRuntime()
+
+        self.assertEqual(runtime._get_model_cache_dir(), "/tmp/voiceclone-models")
 
 
 class RuntimeGenerateTests(unittest.TestCase):

@@ -1,6 +1,6 @@
 [package]
 name = "tauri-app"
-version = "0.4.7"
+version = "0.4.8"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -20,8 +20,10 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
-tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.12", features = ["blocking"] }
+reqwest = "0.12"
 zip = "2.0"
+tokio = { version = "1", features = ["fs", "io-util", "process", "time"] }
+tar = "0.4"
+flate2 = "1"

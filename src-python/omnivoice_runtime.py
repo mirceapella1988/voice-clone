@@ -249,7 +249,7 @@ class OmniVoiceRuntime:
         return torch_module.float32 if device == "cpu" else torch_module.float16
 
     def _get_model_cache_dir(self):
-        model_dir = os.environ.get("APP_MODEL_DIR")
+        model_dir = os.environ.get("VOICECLONE_MODELS") or os.environ.get("APP_MODEL_DIR")
         if model_dir:
             return model_dir
         return default_model_cache_dir()

@@ -26,98 +26,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: setup node
+        uses: actions/setup-node@v4
         with:
-          python-version: '3.10'
+          node-version: lts/*
 
-      - name: Install Python dependencies & PyInstaller
+      - name: install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || '' }}
+
+      - name: install frontend dependencies
+        run: npm install
+
+      - name: Assert runtime assets are not bundled
         shell: bash
         run: |
-          pip install -r src-python/requirements.txt
-          if [ "${{ matrix.platform }}" = "windows-latest" ]; then
-            pip install --force-reinstall --index-url https://download.pytorch.org/whl/cu128 torch==2.8.0+cu128 torchaudio==2.8.0+cu128
-          fi
-          pip install pyinstaller
-          python - <<'PY'
-          import torch
-          from omnivoice import OmniVoice, OmniVoiceGenerationConfig
-
-          print("PyTorch version:", torch.__version__)
-          print("CUDA available:", torch.cuda.is_available())
-          if torch.cuda.is_available():
-              print("CUDA device:", torch.cuda.get_device_name(0))
-          print("OmniVoice imports: ok", OmniVoice.__name__, OmniVoiceGenerationConfig.__name__)
-          PY
-
-      - name: Build Python Sidecar Binary
-        shell: bash
-        run: |
-          rm -rf src-python/models
-          mkdir -p src-tauri/binaries
-          PYINSTALLER_ARGS=(
-            --clean
-            -y
-            --distpath src-tauri/binaries
-            --collect-all omnivoice
-            --collect-all torch
-            --collect-all torchaudio
-            --collect-all transformers
-            --collect-all accelerate
-            --collect-all safetensors
-            --collect-all soundfile
-            --collect-all librosa
-            --collect-all pydub
-            --collect-data huggingface_hub
-            --collect-all hf_xet
-            --hidden-import transformers.models.qwen3
-          )
-          mkdir -p src-tauri/target/release
-          if [ "${{ matrix.platform }}" = "windows-latest" ]; then
-            pyinstaller "${PYINSTALLER_ARGS[@]}" --onedir --name sidecar-x86_64-pc-windows-msvc src-python/sidecar.py
-            
-            # Clean up redundant development files
-            find src-tauri/binaries/sidecar-x86_64-pc-windows-msvc -name "*.lib" -delete
-            find src-tauri/binaries/sidecar-x86_64-pc-windows-msvc -name "*.h" -delete
-            find src-tauri/binaries/sidecar-x86_64-pc-windows-msvc -name "*.hpp" -delete
-            
-            # Remove redundant / unused CUDA and cuDNN DLLs to significantly reduce bundle size
-            rm -f src-tauri/binaries/sidecar-x86_64-pc-windows-msvc/_internal/torch/lib/cudnn_adv64_9.dll
-            rm -f src-tauri/binaries/sidecar-x86_64-pc-windows-msvc/_internal/torch/lib/cusolverMg64_11.dll
-            rm -f src-tauri/binaries/sidecar-x86_64-pc-windows-msvc/_internal/torch/lib/nvrtc64_120_0.alt.dll
-            rm -f src-tauri/binaries/sidecar-x86_64-pc-windows-msvc/_internal/torch/lib/curand64_10.dll
-            rm -f src-tauri/binaries/sidecar-x86_64-pc-windows-msvc/_internal/torch/lib/nvrtc-builtins64_128.dll
-            rm -f src-tauri/binaries/sidecar-x86_64-pc-windows-msvc/_internal/torch/lib/uv.dll
-            rm -f src-tauri/binaries/sidecar-x86_64-pc-windows-msvc/_internal/torch/lib/cufftw64_11.dll
-            rm -f src-tauri/binaries/sidecar-x86_64-pc-windows-msvc/_internal/torch/lib/zlibwapi.dll
-            rm -f src-tauri/binaries/sidecar-x86_64-pc-windows-msvc/_internal/torch/lib/libiompstubs5md.dll
-            rm -f src-tauri/binaries/sidecar-x86_64-pc-windows-msvc/_internal/torch/lib/caffe2_nvrtc.dll
-            
-            # Compress the real Windows sidecar folder into a zip
-            powershell.exe -Command "Compress-Archive -Path 'src-tauri/binaries/sidecar-x86_64-pc-windows-msvc' -DestinationPath 'src-tauri/target/release/VoiceClone-Sidecar-Windows.zip' -Force"
-            
-            # Remove real sidecar and replace with a small dummy file to satisfy Tauri verification
-            rm -rf src-tauri/binaries/sidecar-x86_64-pc-windows-msvc
-            touch src-tauri/binaries/sidecar-x86_64-pc-windows-msvc.exe
-          else
-            pyinstaller "${PYINSTALLER_ARGS[@]}" --onefile --name sidecar-aarch64-apple-darwin src-python/sidecar.py
-            
-            # Compress the real macOS sidecar into a zip
-            zip -j src-tauri/target/release/VoiceClone-Sidecar-MacOS.zip src-tauri/binaries/sidecar-aarch64-apple-darwin
-            
-            # Remove real sidecar and replace with a small dummy file to satisfy Tauri verification
-            rm -f src-tauri/binaries/sidecar-aarch64-apple-darwin
-            touch src-tauri/binaries/sidecar-aarch64-apple-darwin
-            chmod +x src-tauri/binaries/sidecar-aarch64-apple-darwin
-          fi
-          du -sh src-tauri/binaries 2>/dev/null || true
-
-      - name: Assert model files are not bundled
-        shell: bash
-        run: |
-          if find src-python -path 'src-python/models/*' -type f | grep -q .; then
-            echo "::error::src-python/models must not exist in release builds; models are downloaded from Hugging Face on first load."
-            find src-python/models -maxdepth 2 -type f -print
+          if find src-tauri/binaries -type f 2>/dev/null | grep -q .; then
+            echo "::error::src-tauri/binaries must not contain bundled sidecar/runtime files."
+            find src-tauri/binaries -type f -print
             exit 1
           fi
           python - <<'PY'
@@ -125,7 +52,11 @@ jobs:
           from pathlib import Path
 
           config = json.loads(Path("src-tauri/tauri.conf.json").read_text())
-          resources = config.get("bundle", {}).get("resources", {})
+          bundle = config.get("bundle", {})
+          if bundle.get("externalBin"):
+              raise SystemExit("Tauri externalBin must stay empty; runtime installs on first launch.")
+
+          resources = bundle.get("resources", {})
           sources = resources.keys() if isinstance(resources, dict) else resources
           forbidden = []
           for source in sources:
@@ -137,27 +68,8 @@ jobs:
                   "Tauri resources must not bundle OmniVoice model directories: "
                   + ", ".join(map(str, forbidden))
               )
-          print("No OmniVoice model directories are configured as Tauri resources.")
+          print("No bundled sidecar/runtime/model directories are configured.")
           PY
-
-      - name: setup node
-        uses: actions/setup-node@v4
-        with:
-          node-version: lts/*
-
-      - name: install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || '' }}
-
-      - name: install dependencies (ubuntu only)
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
-
-      - name: install frontend dependencies
-        run: npm install
 
       - name: Configure macOS signing
         if: matrix.platform == 'macos-latest'
@@ -191,13 +103,12 @@ jobs:
 
           if [ "$configured" -eq 1 ] && [ "${#missing[@]}" -gt 0 ]; then
             echo "::error::Incomplete macOS signing/notarization secrets. Missing: ${missing[*]}"
-            echo "::error::Set all required Apple secrets, or remove the partial Apple secrets to use ad-hoc signing for draft/internal builds."
             exit 1
           fi
 
           if [ "$configured" -eq 0 ]; then
             echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
-            echo "::warning::No Apple Developer ID signing/notarization secrets configured. Using ad-hoc signing for macOS. This avoids unsigned Apple Silicon bundles, but public distribution should use Developer ID signing and notarization."
+            echo "::warning::No Apple Developer ID signing/notarization secrets configured. Using ad-hoc signing for macOS."
           else
             {
               echo "APPLE_CERTIFICATE=$SECRET_APPLE_CERTIFICATE"
@@ -207,7 +118,6 @@ jobs:
               echo "APPLE_PASSWORD=$SECRET_APPLE_PASSWORD"
               echo "APPLE_TEAM_ID=$SECRET_APPLE_TEAM_ID"
             } >> "$GITHUB_ENV"
-            echo "Using Apple Developer ID signing and notarization for macOS."
           fi
 
       - name: Build and release Tauri App
@@ -217,43 +127,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Voice Clone v__VERSION__"
-          releaseBody: "Bản phát hành tự động cho Voice Clone. Ứng dụng không đi kèm sẵn model weights mà sẽ tự động tải từ Hugging Face trong lần chạy đầu tiên và lưu vào cache. Bản Windows được phân phối dưới dạng duy nhất 1 bản Portable ZIP (CUDA + CPU Auto-Detect) hoặc Installer, tự động tải bộ thư viện AI động (~2.5GB) khi cài đặt hoặc chạy lần đầu, tự động nhận diện và sử dụng GPU/CUDA nếu có, ngược lại tự động fallback về CPU."
+          releaseBody: "Voice Clone installs Python, FFmpeg, PyTorch, and model cache automatically on first launch into ~/.voiceclone. Installers no longer bundle the PyInstaller sidecar or model weights."
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
-
-      - name: Create Portable Zip (Windows only)
-        if: matrix.platform == 'windows-latest'
-        shell: bash
-        run: |
-          PORTABLE_DIR="src-tauri/target/release/VoiceClone-Portable"
-          rm -rf "$PORTABLE_DIR"
-          mkdir -p "$PORTABLE_DIR"
-          cp "src-tauri/target/release/tauri-app.exe" "$PORTABLE_DIR/Voice Clone.exe"
-          mkdir -p "$PORTABLE_DIR/binaries"
-          
-          # Giải nén sidecar zip thực tế chứa đầy đủ thư viện Python và ffmpeg vào thư mục binaries
-          powershell.exe -Command "Expand-Archive -Path 'src-tauri/target/release/VoiceClone-Sidecar-Windows.zip' -DestinationPath '$PORTABLE_DIR/binaries'"
-          
-          # Compress the portable directory to ZIP using powershell Compress-Archive
-          powershell.exe -Command "Compress-Archive -Path '$PORTABLE_DIR/*' -DestinationPath 'src-tauri/target/release/VoiceClone-Portable.zip' -Force"
-
-      - name: Upload Sidecar Zip to Release
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if [ "${{ matrix.platform }}" = "windows-latest" ]; then
-            gh release upload "${{ github.ref_name }}" src-tauri/target/release/VoiceClone-Sidecar-Windows.zip --clobber
-          else
-            gh release upload "${{ github.ref_name }}" src-tauri/target/release/VoiceClone-Sidecar-MacOS.zip --clobber
-          fi
-
-      - name: Upload Portable Zip to Release (Windows only)
-        if: matrix.platform == 'windows-latest'
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Use github CLI to upload the portable zip directly to the release draft
-          gh release upload "${{ github.ref_name }}" src-tauri/target/release/VoiceClone-Portable.zip --clobber

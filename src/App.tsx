@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { AudioPlayer } from "./components/AudioPlayer";
+import { SetupScreen } from "./components/SetupScreen";
+import { useSetup } from "./hooks/useSetup";
 import voiceCloneIcon from "./assets/voice-clone-icon.png";
 import "./index.css";
 
@@ -115,15 +117,6 @@ const normalizeSearchText = (value: string) =>
   value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
 export default function App() {
-  // Setup loader states
-  const [sidecarInstalled, setSidecarInstalled] = useState<boolean | null>(null);
-  const [installStatus, setInstallStatus] = useState<"idle" | "connecting" | "downloading" | "extracting" | "completed" | "error">("idle");
-  const [installProgress, setInstallProgress] = useState(0);
-  const [installSpeed, setInstallSpeed] = useState(0); // MB/s
-  const [installDownloaded, setInstallDownloaded] = useState(0); // bytes
-  const [installTotal, setInstallTotal] = useState(0); // bytes
-  const [installMessage, setInstallMessage] = useState("");
-
   // Model state
   const [modelStatus, setModelStatus] = useState<"unloaded" | "loading" | "ready">("unloaded");
   const [modelProgress, setModelProgress] = useState(0);
@@ -393,83 +386,11 @@ export default function App() {
     return parseWavManual(arrayBuffer);
   };
 
-  // Check if sidecar is installed on startup
-  useEffect(() => {
-    invoke<boolean>("check_sidecar_installed")
-      .then((installed) => {
-        setSidecarInstalled(installed);
-        if (installed) {
-          appendLog("Sidecar đã được cài đặt và sẵn sàng.");
-        } else {
-          appendLog("Chưa tìm thấy thư viện AI. Gợi ý tải bộ thư viện AI sidecar.");
-        }
-      })
-      .catch((err) => {
-        appendLog(`Lỗi kiểm tra Sidecar: ${err}`);
-        setSidecarInstalled(false);
-      });
-  }, []);
-
-  const handleDownloadAndInstall = async () => {
-    setInstallStatus("connecting");
-    setInstallMessage("Đang kết nối tới máy chủ...");
-    setInstallProgress(0);
-    setInstallSpeed(0);
-    setInstallDownloaded(0);
-    setInstallTotal(0);
-
-    try {
-      const unlistenProgress = await listen<string>("download-progress", (event) => {
-        try {
-          const data = JSON.parse(event.payload);
-          if (data.type === "connecting") {
-            setInstallStatus("connecting");
-            setInstallMessage(data.message || "Đang kết nối...");
-          } else if (data.type === "downloading") {
-            setInstallStatus("downloading");
-            setInstallProgress(data.percent || 0);
-            setInstallSpeed(data.speed || 0);
-            setInstallDownloaded(data.downloaded || 0);
-            setInstallTotal(data.total || 0);
-          } else if (data.type === "extracting") {
-            setInstallStatus("extracting");
-            setInstallMessage(data.message || "Đang giải nén bộ thư viện...");
-            setInstallProgress(100);
-          } else if (data.type === "completed") {
-            setInstallStatus("completed");
-            setInstallMessage(data.message || "Cài đặt thành công!");
-            unlistenProgress();
-            
-            invoke("start_sidecar_dynamically")
-              .then(() => {
-                appendLog("Sidecar started dynamically after download.");
-                setSidecarInstalled(true);
-              })
-              .catch((err) => {
-                appendLog(`Lỗi khởi chạy Sidecar động: ${err}`);
-                setInstallStatus("error");
-                setInstallMessage(`Không thể khởi chạy Sidecar: ${err}`);
-              });
-          } else if (data.type === "error") {
-            setInstallStatus("error");
-            setInstallMessage(data.message || "Lỗi trong quá trình tải xuống.");
-            unlistenProgress();
-          }
-        } catch (e) {
-          console.error("Lỗi phân tích cú pháp tiến độ tải:", e);
-        }
-      });
-
-      await invoke("download_and_install_sidecar");
-    } catch (err: any) {
-      setInstallStatus("error");
-      setInstallMessage(err.message || String(err));
-    }
-  };
+  const setup = useSetup(appendLog);
 
   // Listen to Tauri events from sidecar
   useEffect(() => {
-    if (!sidecarInstalled) return;
+    if (!setup.isReady) return;
 
     let disposed = false;
     let unlisten: (() => void) | null = null;
@@ -603,7 +524,7 @@ export default function App() {
       }
       if (unlisten) unlisten();
     };
-  }, [sidecarInstalled]);
+  }, [setup.isReady]);
 
   const handlePresetSelect = async (preset: PresetVoice) => {
     setSelectedPresetId(preset.id);
@@ -801,94 +722,8 @@ export default function App() {
   const isDeviceSelectionDisabled = devicesStatus === "loading" || modelStatus !== "unloaded";
   const isLoadModelDisabled = devicesStatus === "loading";
 
-  if (sidecarInstalled === null) {
-    return (
-      <div className="setup-fullscreen-bg">
-        <div className="setup-glass-card">
-          <img className="setup-logo pulse" src={voiceCloneIcon} alt="Voice Clone" />
-          <h2>Voice Clone AI</h2>
-          <p className="subtitle" style={{ color: "var(--text-secondary)", fontSize: "0.82rem" }}>Đang kiểm tra cấu hình môi trường...</p>
-          <div className="setup-spinner-wrapper" style={{ marginTop: "10px" }}>
-            <svg className="spinner-icon" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="2.5">
-              <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" strokeLinecap="round"/>
-            </svg>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (sidecarInstalled === false) {
-    return (
-      <div className="setup-fullscreen-bg">
-        <div className="setup-glass-card error-card" style={{ borderTop: "4px solid var(--accent-red)" }}>
-          <img className="setup-logo" src={voiceCloneIcon} alt="Voice Clone" />
-          <h2 style={{ color: "var(--accent-red)" }}>Không Tìm Thấy Thư Viện AI</h2>
-          
-          <div className="setup-intro" style={{ textAlign: "left", fontSize: "0.88rem", lineHeight: "1.5" }}>
-            <p>Ứng dụng Voice Clone yêu cầu thư viện AI Sidecar đi kèm để hoạt động trực tiếp và bảo mật trên máy tính của bạn.</p>
-            
-            <div style={{
-              background: "rgba(255, 255, 255, 0.03)",
-              border: "1px solid rgba(255, 255, 255, 0.08)",
-              borderRadius: "8px",
-              padding: "12px",
-              marginTop: "12px",
-              color: "var(--text-secondary)"
-            }}>
-              <strong style={{ color: "var(--text-primary)", display: "block", marginBottom: "6px" }}>Hướng dẫn sửa lỗi:</strong>
-              <ul style={{ margin: 0, paddingLeft: "16px" }}>
-                <li>Đảm bảo bạn đã giải nén toàn bộ tệp ZIP bản <strong>Portable Full</strong>.</li>
-                <li>Không di chuyển file <code>Voice Clone.exe</code> ra ngoài thư mục đã giải nén.</li>
-                <li>Thư mục <code>binaries/</code> phải nằm cùng cấp với file chạy <code>Voice Clone.exe</code>.</li>
-              </ul>
-            </div>
-          </div>
-
-          <div className="setup-actions" style={{ marginTop: "20px" }}>
-            {installStatus === "connecting" || installStatus === "downloading" || installStatus === "extracting" ? (
-              <div className="setup-progress-container" style={{ width: "100%" }}>
-                <div className="setup-progress-track" style={{ height: "6px", background: "rgba(255,255,255,0.1)", borderRadius: "3px", overflow: "hidden" }}>
-                  <div className="setup-progress-fill" style={{ width: `${installProgress}%`, height: "100%", background: "var(--accent-blue)", transition: "width 0.3s ease" }}></div>
-                </div>
-                <div className="setup-progress-info" style={{ display: "flex", justifyContent: "space-between", marginTop: "6px", fontSize: "0.8rem", color: "var(--text-secondary)" }}>
-                  <span>{installMessage}</span>
-                  {installStatus === "downloading" && installTotal > 0 && (
-                    <span>{(installDownloaded / (1024 * 1024)).toFixed(1)} / {(installTotal / (1024 * 1024)).toFixed(1)} MB · {installSpeed.toFixed(2)} MB/s</span>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: "8px", width: "100%" }}>
-                {installStatus === "error" && (
-                  <div className="error-icon-wrapper" style={{ color: "var(--accent-red)", fontSize: "0.85rem", textAlign: "center", marginBottom: "4px" }}>
-                    {installMessage || "Có lỗi xảy ra trong quá trình cài đặt."}
-                  </div>
-                )}
-                <div style={{ display: "flex", gap: "8px" }}>
-                  <button className="btn-primary" onClick={handleDownloadAndInstall} style={{ flex: 1 }}>
-                    ⬇️ Tải và Cài đặt
-                  </button>
-                  <button
-                    className="btn-secondary"
-                    onClick={async () => {
-                      setSidecarInstalled(null);
-                      const installed = await invoke<boolean>("check_sidecar_installed");
-                      setSidecarInstalled(installed);
-                      if (installed) {
-                        appendLog("Sidecar đã được kết nối sau khi quét lại.");
-                      }
-                    }}
-                  >
-                    🔄 Quét lại
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-    );
+  if (!setup.isReady) {
+    return <SetupScreen setup={setup} />;
   }
 
   return (
