@@ -6,7 +6,6 @@ import {
   Activity,
   AudioLines,
   BadgeCheck,
-  Bot,
   BrainCircuit,
   Check,
   ChevronDown,
@@ -16,17 +15,16 @@ import {
   Headphones,
   Languages,
   Loader2,
+  MemoryStick,
   Mic2,
   PanelBottomOpen,
   Play,
   Settings,
   SlidersHorizontal,
-  Sparkles,
   Terminal,
   UploadCloud,
   WandSparkles,
   X,
-  Zap,
 } from "lucide-react";
 import { AudioPlayer } from "./components/AudioPlayer";
 import { SetupScreen } from "./components/SetupScreen";
@@ -71,6 +69,12 @@ interface ReferenceDiagnostics {
   preprocess_prompt?: boolean;
   postprocess_output?: boolean;
   language_id?: string | null;
+}
+
+interface SystemUsage {
+  cpu_percent: number;
+  ram_percent: number;
+  gpu_percent: number | null;
 }
 
 interface LanguageOption {
@@ -139,6 +143,19 @@ const INSTRUCT_OPTIONS: InstructOption[] = [
 ];
 
 const INSTRUCT_OPTION_BY_VALUE = new Map(INSTRUCT_OPTIONS.map((option) => [option.value, option]));
+const AUDIO_FILE_EXTENSIONS = [
+  "wav",
+  "mp3",
+  "m4a",
+  "aac",
+  "flac",
+  "ogg",
+  "opus",
+  "webm",
+  "aiff",
+  "aif",
+];
+const AUDIO_FILE_ACCEPT = AUDIO_FILE_EXTENSIONS.map((extension) => `.${extension}`).join(",");
 
 const normalizeSearchText = (value: string) =>
   value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
@@ -150,6 +167,9 @@ const formatDiagnosticSeconds = (value?: number) =>
 
 const formatDiagnosticNumber = (value?: number, digits = 0) =>
   typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "—";
+
+const formatUsagePercent = (value?: number | null) =>
+  typeof value === "number" && Number.isFinite(value) ? `${Math.round(Math.max(0, Math.min(100, value)))}%` : "—";
 
 const formatVoiceBadge = (value: string) => {
   const normalized = normalizeSearchText(value);
@@ -165,11 +185,16 @@ const getEfficiencyLabel = (rtf?: number) => {
   return "Chậm";
 };
 
+const isSupportedAudioFile = (file: File) => {
+  const extension = file.name.split(".").pop()?.toLowerCase() || "";
+  return AUDIO_FILE_EXTENSIONS.includes(extension) || file.type.startsWith("audio/");
+};
+
 function MetricTile({ label, value, accent }: { label: string; value: ReactNode; accent?: string }) {
   return (
-    <div className="rounded-lg border border-white/10 bg-white/[0.04] p-3">
+    <div className="rounded-lg border border-white/10 bg-white/[0.04] p-2.5">
       <div className="text-[11px] font-semibold uppercase text-zinc-500">{label}</div>
-      <div className={cx("mt-1 font-mono text-lg font-bold text-zinc-100", accent)}>{value}</div>
+      <div className={cx("mt-1 font-mono text-base font-bold text-zinc-100", accent)}>{value}</div>
     </div>
   );
 }
@@ -184,10 +209,10 @@ function StepHeader({ number, title, subtitle, icon }: { number: string; title: 
           </span>
           Bước {number}
         </div>
-        <h2 className="mt-3 text-xl font-bold text-zinc-50">{title}</h2>
-        <p className="mt-1 text-sm text-zinc-400">{subtitle}</p>
+        <h2 className="mt-2 text-lg font-bold text-zinc-50">{title}</h2>
+        <p className="mt-1 text-xs text-zinc-400">{subtitle}</p>
       </div>
-      <div className="rounded-xl border border-white/10 bg-white/[0.06] p-3 text-indigo-200 shadow-lg shadow-indigo-950/20">
+      <div className="rounded-xl border border-white/10 bg-white/[0.06] p-2.5 text-indigo-200 shadow-lg shadow-indigo-950/20">
         {icon}
       </div>
     </div>
@@ -212,7 +237,7 @@ export default function App() {
   const [refAudioData, setRefAudioData] = useState<Float32Array | null>(null);
   const [croppedRefAudioData, setCroppedRefAudioData] = useState<Float32Array | null>(null);
   const [refText, setRefText] = useState("");
-  const [uploadStatus, setUploadStatus] = useState("Chưa có tệp WAV nào được tải lên.");
+  const [uploadStatus, setUploadStatus] = useState("Chưa có tệp audio nào được tải lên.");
   const [isDragActive, setIsDragActive] = useState(false);
 
   const [cfgStrength, setCfgStrength] = useState(2.0);
@@ -235,6 +260,7 @@ export default function App() {
 
   const [logs, setLogs] = useState<string[]>([]);
   const [metrics, setMetrics] = useState<Metrics | null>(null);
+  const [systemUsage, setSystemUsage] = useState<SystemUsage | null>(null);
   const [referenceDiagnostics, setReferenceDiagnostics] = useState<ReferenceDiagnostics | null>(null);
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
   const [isLogsOpen, setIsLogsOpen] = useState(false);
@@ -516,7 +542,8 @@ export default function App() {
             generationInFlightRef.current = false;
             appendLog("Generation stopped.");
             setIsGenerating(false);
-            setGenerateStatus("Đã ngắt");
+            setGenerateProgress(0);
+            setGenerateStatus("");
           } else if (data.type === "error") {
             generationInFlightRef.current = false;
             appendLog(`Sidecar Error: ${data.message}`);
@@ -604,6 +631,12 @@ export default function App() {
   };
 
   const loadCustomAudioFile = async (file: File) => {
+    if (!isSupportedAudioFile(file)) {
+      setUploadStatus("Tệp không hợp lệ. Vui lòng chọn đúng định dạng audio.");
+      alert(`Vui lòng chọn tệp audio (${AUDIO_FILE_EXTENSIONS.map((extension) => `.${extension}`).join(", ")}).`);
+      return;
+    }
+
     setActiveTab("custom");
     setRefAudioData(null);
     setCroppedRefAudioData(null);
@@ -618,9 +651,9 @@ export default function App() {
       setUploadStatus(`${file.name} · ${(audioRes.data.length / audioRes.sampleRate).toFixed(1)}s · ${audioRes.sampleRate} Hz`);
       appendLog(`Loaded custom audio file (${audioRes.data.length} samples, ${audioRes.sampleRate} Hz)`);
     } catch (err: any) {
-      setUploadStatus("Không thể đọc tệp. Vui lòng chọn WAV hợp lệ.");
+      setUploadStatus("Không thể đọc tệp. Vui lòng chọn tệp audio hợp lệ.");
       appendLog(`Failed to decode custom audio file: ${err.message}`);
-      alert("Định dạng file không được hỗ trợ hoặc bị lỗi. Vui lòng tải file .wav.");
+      alert("Định dạng file không được hỗ trợ hoặc bị lỗi. Vui lòng chọn tệp audio khác.");
     }
   };
 
@@ -638,23 +671,34 @@ export default function App() {
     await loadCustomAudioFile(file);
   };
 
-  const handleLoadModel = async () => {
+  const handleLoadModel = async (deviceOverride?: string) => {
     if (devicesStatus === "loading") {
       appendLog("Hardware devices are still loading. Please wait.");
       return;
     }
 
+    const deviceToLoad = deviceOverride || selectedDevice;
     setModelStatus("loading");
     setModelProgress(10);
     setModelProgressStatus("Đang khởi tạo sidecar...");
-    appendLog(`Sending load command to Python sidecar with device: ${selectedDevice.toUpperCase()}...`);
+    setActualDevice("");
+    appendLog(`Sending load command to Python sidecar with device: ${deviceToLoad.toUpperCase()}...`);
     try {
       await invoke("send_to_sidecar", {
-        msg: JSON.stringify({ command: "load", device: selectedDevice }),
+        msg: JSON.stringify({ command: "load", device: deviceToLoad }),
       });
     } catch (err: any) {
       appendLog(`Failed to communicate with sidecar: ${err.message || err}`);
       setModelStatus("unloaded");
+    }
+  };
+
+  const handleDeviceChange = (device: string) => {
+    setSelectedDevice(device);
+
+    if (modelStatus === "ready" && !isGenerating) {
+      appendLog(`Hardware device changed to ${device.toUpperCase()}. Reloading model...`);
+      void handleLoadModel(device);
     }
   };
 
@@ -777,12 +821,17 @@ export default function App() {
 
   const handleStop = async () => {
     appendLog("Sending stop command to Python sidecar...");
+    setGenerateStatus("Đang dừng...");
     try {
       await invoke("send_to_sidecar", {
         msg: JSON.stringify({ command: "stop" }),
       });
     } catch (err: any) {
       appendLog(`Failed to stop: ${err.message || err}`);
+      generationInFlightRef.current = false;
+      setIsGenerating(false);
+      setGenerateProgress(0);
+      setGenerateStatus("");
     }
   };
 
@@ -790,7 +839,28 @@ export default function App() {
     consoleEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [logs]);
 
-  const isDeviceSelectionDisabled = devicesStatus === "loading" || modelStatus !== "unloaded";
+  useEffect(() => {
+    if (!setup.isReady) return;
+
+    let disposed = false;
+    const refreshSystemUsage = async () => {
+      try {
+        const usage = await invoke<SystemUsage>("get_system_usage");
+        if (!disposed) setSystemUsage(usage);
+      } catch {
+        if (!disposed) setSystemUsage(null);
+      }
+    };
+
+    void refreshSystemUsage();
+    const timer = window.setInterval(refreshSystemUsage, 2000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [setup.isReady]);
+
+  const isDeviceSelectionDisabled = devicesStatus === "loading" || modelStatus === "loading" || isGenerating;
   const isLoadModelDisabled = devicesStatus === "loading";
   const selectedPreset = presets.find((preset) => preset.id === selectedPresetId);
   const currentDeviceName =
@@ -811,15 +881,15 @@ export default function App() {
 
   return (
     <main className="relative flex h-screen min-h-0 flex-col overflow-hidden bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.16),transparent_28%),radial-gradient(circle_at_top_right,rgba(99,102,241,0.16),transparent_30%),hsl(222_47%_5%)] text-zinc-100">
-      <header className="z-20 border-b border-white/10 bg-zinc-950/55 px-5 py-4 backdrop-blur-md">
+      <header className="z-20 border-b border-white/10 bg-zinc-950/55 px-4 py-3 backdrop-blur-md">
         <div className="mx-auto flex max-w-[1800px] items-center justify-between gap-4">
           <div className="flex min-w-0 items-center gap-3">
             <div className="relative">
               <div className="absolute inset-0 rounded-2xl bg-gradient-to-br from-emerald-400 to-indigo-500 blur-md opacity-50" />
-              <img className="relative h-11 w-11 rounded-2xl border border-white/15 bg-zinc-900 object-contain p-1.5" src={voiceCloneIcon} alt="Voice Clone Studio" />
+              <img className="relative h-10 w-10 rounded-2xl border border-white/15 bg-zinc-900 object-contain p-1.5" src={voiceCloneIcon} alt="Voice Clone Studio" />
             </div>
             <div className="min-w-0">
-              <h1 className="truncate text-xl font-extrabold text-white">Voice Clone Studio</h1>
+              <h1 className="truncate text-lg font-extrabold text-white">Voice Clone Studio</h1>
               <p className="truncate text-xs text-zinc-400">Local desktop voice cloning · Tauri · OmniVoice runtime</p>
             </div>
           </div>
@@ -837,7 +907,7 @@ export default function App() {
             {modelStatus === "unloaded" && (
               <button
                 className="rounded-full bg-indigo-500 px-4 py-2 text-sm font-bold text-white shadow-lg shadow-indigo-500/25 transition hover:scale-[1.02] hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-50"
-                onClick={handleLoadModel}
+                onClick={() => handleLoadModel()}
                 disabled={isLoadModelDisabled}
               >
                 Tải model
@@ -872,10 +942,10 @@ export default function App() {
         </div>
       )}
 
-      <section className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
-        <div className="mx-auto grid max-w-[1800px] grid-cols-1 gap-4 xl:grid-cols-[1.05fr_1fr_1fr]">
-          <article className="glass-panel flex min-h-[720px] flex-col gap-5 p-5">
-            <StepHeader number="1" title="Chọn giọng tham chiếu" subtitle="Chọn preset có sẵn hoặc tải WAV của bạn để làm reference voice." icon={<Mic2 className="h-6 w-6" />} />
+      <section className="min-h-0 flex-1 overflow-y-auto px-4 py-3 xl:overflow-hidden">
+        <div className="mx-auto grid max-w-[1800px] grid-cols-1 gap-3 xl:h-full xl:grid-cols-[1.05fr_1fr_1fr]">
+          <article className="glass-panel flex min-h-[650px] flex-col gap-4 p-4 xl:min-h-0 xl:overflow-y-auto">
+            <StepHeader number="1" title="Chọn giọng tham chiếu" subtitle="Chọn preset có sẵn hoặc tải tệp audio của bạn để làm reference voice." icon={<Mic2 className="h-6 w-6" />} />
 
             <div className="grid grid-cols-2 gap-2 rounded-2xl border border-white/10 bg-zinc-950/50 p-1">
               <button
@@ -901,14 +971,14 @@ export default function App() {
             </div>
 
             {activeTab === "preset" ? (
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="grid h-[416px] shrink-0 grid-cols-1 gap-2 overflow-y-auto pr-1 sm:h-[204px] sm:grid-cols-2">
                 {presets.map((preset) => {
                   const isActive = selectedPresetId === preset.id;
                   return (
                     <button
                       key={preset.id}
                       className={cx(
-                        "group rounded-2xl border p-4 text-left transition hover:scale-[1.015]",
+                        "group rounded-2xl border p-3 text-left transition hover:scale-[1.015]",
                         isActive ? "border-emerald-300/50 bg-emerald-400/10 ring-2 ring-emerald-300/20" : "border-white/10 bg-white/[0.04] hover:border-indigo-300/40 hover:bg-white/[0.07]",
                       )}
                       onClick={() => handlePresetSelect(preset)}
@@ -945,22 +1015,22 @@ export default function App() {
                 onDragLeave={() => setIsDragActive(false)}
                 onDrop={handleDrop}
               >
-                <input ref={fileInputRef} className="hidden" type="file" accept="audio/wav,audio/*" onChange={handleCustomAudioUpload} />
+                <input ref={fileInputRef} className="hidden" type="file" accept={AUDIO_FILE_ACCEPT} onChange={handleCustomAudioUpload} />
                 <UploadCloud className="mx-auto h-10 w-10 text-emerald-300" />
-                <div className="mt-3 text-base font-bold text-white">Kéo thả WAV hoặc chọn tệp</div>
-                <p className="mt-1 text-sm text-zinc-400">Khuyến nghị 5-10 giây, ít nhiễu, đúng nội dung transcript.</p>
+                <div className="mt-3 text-base font-bold text-white">Kéo thả audio hoặc chọn tệp</div>
+                <p className="mt-1 text-sm text-zinc-400">Chỉ nhận file audio: WAV, MP3, M4A, AAC, FLAC, OGG, OPUS, WEBM, AIFF. Khuyến nghị 5-10 giây, ít nhiễu.</p>
                 <button
                   className="mt-4 rounded-full border border-emerald-300/30 bg-emerald-400/10 px-4 py-2 text-sm font-bold text-emerald-100 transition hover:scale-[1.02] hover:bg-emerald-400 hover:text-zinc-950"
                   onClick={() => fileInputRef.current?.click()}
                 >
-                  Chọn WAV
+                  Chọn tệp
                 </button>
                 <div className="mt-3 text-xs text-zinc-500">{uploadStatus}</div>
               </div>
             )}
 
-            <div className="rounded-2xl border border-white/10 bg-zinc-950/35 p-3">
-              <div className="mb-3 flex items-center justify-between gap-3">
+            <div className="rounded-2xl border border-white/10 bg-zinc-950/35 p-2.5">
+              <div className="mb-2 flex items-center justify-between gap-3">
                 <div className="text-sm font-bold text-white">Waveform tham chiếu</div>
                 <div className="rounded-full bg-white/[0.06] px-2.5 py-1 font-mono text-xs text-zinc-400">
                   {referenceDuration ? `${referenceDuration.toFixed(1)}s · ${refSampleRate} Hz` : "Đang chờ audio"}
@@ -980,127 +1050,129 @@ export default function App() {
               />
             </div>
 
-            <label className="flex flex-1 flex-col gap-2">
+            <label className="flex flex-col gap-2">
               <span className="text-xs font-bold uppercase text-zinc-500">Reference Text</span>
               <textarea
-                className="min-h-[118px] flex-1 resize-none rounded-2xl border border-white/10 bg-zinc-950/55 p-4 text-sm leading-6 text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-emerald-300/50 focus:ring-4 focus:ring-emerald-400/10"
+                className="h-28 resize-none rounded-2xl border border-white/10 bg-zinc-950/55 p-3 text-sm leading-6 text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-emerald-300/50 focus:ring-4 focus:ring-emerald-400/10"
                 value={refText}
                 onChange={(e) => setRefText(e.target.value)}
                 placeholder="Nhập chính xác nội dung đang nói trong file mẫu..."
                 readOnly={activeTab === "preset"}
               />
-              <span className="text-xs text-amber-200/80">Transcription alignment rất quan trọng: Reference Text phải khớp nội dung WAV để clone ổn định.</span>
+              <span className="text-xs text-amber-200/80">Transcription alignment rất quan trọng: Reference Text phải khớp nội dung tệp audio để clone ổn định.</span>
             </label>
           </article>
 
-          <article className="glass-panel flex min-h-[720px] flex-col gap-5 p-5">
+          <article className="glass-panel flex min-h-[650px] flex-col gap-4 overflow-hidden p-4 xl:min-h-0">
             <StepHeader number="2" title="Cấu hình tổng hợp" subtitle="Nhập nội dung mục tiêu, chọn ngôn ngữ và style giọng." icon={<SlidersHorizontal className="h-6 w-6" />} />
 
-            <label className="flex flex-1 flex-col gap-2">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold uppercase text-zinc-500">Target Text</span>
-                <span className="font-mono text-xs text-zinc-500">{targetText.length} ký tự</span>
-              </div>
-              <textarea
-                className="min-h-[220px] flex-1 resize-none rounded-3xl border border-white/10 bg-zinc-950/55 p-5 text-base leading-7 text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-indigo-300/50 focus:ring-4 focus:ring-indigo-400/10"
-                value={targetText}
-                onChange={(e) => setTargetText(e.target.value)}
-                placeholder="Nhập nội dung bạn muốn clone thành giọng nói..."
-              />
-            </label>
-
-            <label className="flex flex-col gap-2">
-              <span className="text-xs font-bold uppercase text-zinc-500">Ngôn ngữ</span>
-              <div className="relative">
-                <Languages className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-indigo-200" />
-                <select
-                  className="w-full appearance-none rounded-2xl border border-white/10 bg-zinc-950/55 py-3 pl-11 pr-10 text-sm font-semibold text-zinc-100 outline-none transition focus:border-indigo-300/50 focus:ring-4 focus:ring-indigo-400/10"
-                  value={selectedLanguage}
-                  onChange={(e) => setSelectedLanguage(e.target.value)}
-                >
-                  {LANGUAGE_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-                <ChevronDown className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
-              </div>
-            </label>
-
-            <div className="relative" onBlur={() => window.setTimeout(() => setIsInstructMenuOpen(false), 120)}>
-              <span className="mb-2 block text-xs font-bold uppercase text-zinc-500">Instruct / Voice Styling</span>
-              <div className="min-h-[60px] rounded-2xl border border-white/10 bg-zinc-950/55 p-2 transition focus-within:border-emerald-300/50 focus-within:ring-4 focus-within:ring-emerald-400/10" onClick={() => setIsInstructMenuOpen(true)}>
-                <div className="flex flex-wrap items-center gap-2">
-                  {selectedInstructOptions.map((option) => (
-                    <span className="inline-flex max-w-full items-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-400/10 px-3 py-1.5 text-xs font-bold text-emerald-50" key={option.value}>
-                      <span>{option.label}</span>
-                      <small className="font-mono text-emerald-200/70">{option.value}</small>
-                      <button
-                        type="button"
-                        aria-label={`Bỏ ${option.label}`}
-                        className="rounded-full p-0.5 text-emerald-100/70 hover:bg-red-400/20 hover:text-red-100"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          removeInstructOption(option.value);
-                        }}
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </span>
-                  ))}
-                  <input
-                    type="text"
-                    value={instructQuery}
-                    className="min-w-[180px] flex-1 border-none bg-transparent px-2 py-2 text-sm text-zinc-100 outline-none placeholder:text-zinc-600"
-                    onFocus={() => setIsInstructMenuOpen(true)}
-                    onChange={(e) => {
-                      setInstructQuery(e.target.value);
-                      setIsInstructMenuOpen(true);
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" && filteredInstructOptions.length > 0) {
-                        event.preventDefault();
-                        addInstructOption(filteredInstructOptions[0]);
-                      } else if (event.key === "Backspace" && !instructQuery && selectedInstructValues.length > 0) {
-                        removeInstructOption(selectedInstructValues[selectedInstructValues.length - 1]);
-                      } else if (event.key === "Escape") {
-                        setIsInstructMenuOpen(false);
-                      }
-                    }}
-                    placeholder={selectedInstructOptions.length === 0 ? "Tìm Male, Whisper, High pitch, American accent..." : "Thêm tag..."}
-                  />
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+              <label className="flex flex-col gap-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase text-zinc-500">Target Text</span>
+                  <span className="font-mono text-xs text-zinc-500">{targetText.length} ký tự</span>
                 </div>
-              </div>
-              {isInstructMenuOpen && (
-                <div className="absolute z-30 mt-2 max-h-80 w-full overflow-y-auto rounded-2xl border border-indigo-300/30 bg-zinc-950/95 p-2 shadow-2xl shadow-black/60 backdrop-blur-md" onMouseDown={(event) => event.preventDefault()}>
-                  {groupedInstructOptions.length > 0 ? (
-                    groupedInstructOptions.map(([group, options]) => (
-                      <div key={group} className="mb-2 last:mb-0">
-                        <div className="px-3 py-2 text-[11px] font-bold uppercase text-zinc-500">{group}</div>
-                        <div className="grid gap-1">
-                          {options.map((option) => (
-                            <button
-                              type="button"
-                              className="flex items-center justify-between gap-3 rounded-xl px-3 py-2 text-left text-sm text-zinc-300 transition hover:bg-indigo-400/15 hover:text-white"
-                              key={option.value}
-                              onClick={() => addInstructOption(option)}
-                            >
-                              <span className="font-semibold">{option.label}</span>
-                              <code className="text-xs text-indigo-200">{option.value}</code>
-                            </button>
-                          ))}
+                <textarea
+                  className="h-36 resize-none rounded-3xl border border-white/10 bg-zinc-950/55 p-4 text-base leading-7 text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-indigo-300/50 focus:ring-4 focus:ring-indigo-400/10"
+                  value={targetText}
+                  onChange={(e) => setTargetText(e.target.value)}
+                  placeholder="Nhập nội dung cần clone..."
+                />
+              </label>
+
+              <label className="flex flex-col gap-2">
+                <span className="text-xs font-bold uppercase text-zinc-500">Ngôn ngữ</span>
+                <div className="relative">
+                  <Languages className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-indigo-200" />
+                  <select
+                    className="w-full appearance-none rounded-2xl border border-white/10 bg-zinc-950/55 py-2.5 pl-11 pr-10 text-sm font-semibold text-zinc-100 outline-none transition focus:border-indigo-300/50 focus:ring-4 focus:ring-indigo-400/10"
+                    value={selectedLanguage}
+                    onChange={(e) => setSelectedLanguage(e.target.value)}
+                  >
+                    {LANGUAGE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                  <ChevronDown className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+                </div>
+              </label>
+
+              <div className="relative" onBlur={() => window.setTimeout(() => setIsInstructMenuOpen(false), 120)}>
+                <span className="mb-2 block text-xs font-bold uppercase text-zinc-500">Instruct / Voice Styling</span>
+                <div className="min-h-[52px] rounded-2xl border border-white/10 bg-zinc-950/55 p-2 transition focus-within:border-emerald-300/50 focus-within:ring-4 focus-within:ring-emerald-400/10" onClick={() => setIsInstructMenuOpen(true)}>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {selectedInstructOptions.map((option) => (
+                      <span className="inline-flex max-w-full items-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-400/10 px-3 py-1.5 text-xs font-bold text-emerald-50" key={option.value}>
+                        <span>{option.label}</span>
+                        <small className="font-mono text-emerald-200/70">{option.value}</small>
+                        <button
+                          type="button"
+                          aria-label={`Bỏ ${option.label}`}
+                          className="rounded-full p-0.5 text-emerald-100/70 hover:bg-red-400/20 hover:text-red-100"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            removeInstructOption(option.value);
+                          }}
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </span>
+                    ))}
+                    <input
+                      type="text"
+                      value={instructQuery}
+                      className="min-w-[180px] flex-1 border-none bg-transparent px-2 py-1.5 text-sm text-zinc-100 outline-none placeholder:text-zinc-600"
+                      onFocus={() => setIsInstructMenuOpen(true)}
+                      onChange={(e) => {
+                        setInstructQuery(e.target.value);
+                        setIsInstructMenuOpen(true);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && filteredInstructOptions.length > 0) {
+                          event.preventDefault();
+                          addInstructOption(filteredInstructOptions[0]);
+                        } else if (event.key === "Backspace" && !instructQuery && selectedInstructValues.length > 0) {
+                          removeInstructOption(selectedInstructValues[selectedInstructValues.length - 1]);
+                        } else if (event.key === "Escape") {
+                          setIsInstructMenuOpen(false);
+                        }
+                      }}
+                      placeholder={selectedInstructOptions.length === 0 ? "Tìm Male, Whisper, High pitch, American accent..." : "Thêm tag..."}
+                    />
+                  </div>
+                </div>
+                {isInstructMenuOpen && (
+                  <div className="absolute z-30 mt-2 max-h-72 w-full overflow-y-auto rounded-2xl border border-indigo-300/30 bg-zinc-950/95 p-2 shadow-2xl shadow-black/60 backdrop-blur-md" onMouseDown={(event) => event.preventDefault()}>
+                    {groupedInstructOptions.length > 0 ? (
+                      groupedInstructOptions.map(([group, options]) => (
+                        <div key={group} className="mb-2 last:mb-0">
+                          <div className="px-3 py-2 text-[11px] font-bold uppercase text-zinc-500">{group}</div>
+                          <div className="grid gap-1">
+                            {options.map((option) => (
+                              <button
+                                type="button"
+                                className="flex items-center justify-between gap-3 rounded-xl px-3 py-2 text-left text-sm text-zinc-300 transition hover:bg-indigo-400/15 hover:text-white"
+                                key={option.value}
+                                onClick={() => addInstructOption(option)}
+                              >
+                                <span className="font-semibold">{option.label}</span>
+                                <code className="text-xs text-indigo-200">{option.value}</code>
+                              </button>
+                            ))}
+                          </div>
                         </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="p-4 text-sm text-zinc-500">Không có tag OmniVoice hợp lệ phù hợp.</div>
-                  )}
-                </div>
-              )}
-              <p className="mt-2 text-xs text-zinc-500">App hiển thị tiếng Việt nhưng gửi sang OmniVoice: {instructText || "không có instruct"}.</p>
+                      ))
+                    ) : (
+                      <div className="p-4 text-sm text-zinc-500">Không có tag OmniVoice hợp lệ phù hợp.</div>
+                    )}
+                  </div>
+                )}
+                <p className="mt-2 text-xs text-zinc-500">App hiển thị tiếng Việt nhưng gửi sang OmniVoice: {instructText || "không có instruct"}.</p>
+              </div>
             </div>
 
             {isGenerating ? (
-              <div className="rounded-3xl border border-indigo-300/20 bg-indigo-400/10 p-4">
+              <div className="flex-shrink-0 rounded-3xl border border-indigo-300/20 bg-indigo-400/10 p-4">
                 <div className="mb-3 flex items-center justify-between gap-3 text-sm font-bold text-indigo-100">
                   <span className="truncate">{generateStatus}</span>
                   <span>{generateProgress}%</span>
@@ -1115,7 +1187,7 @@ export default function App() {
               </div>
             ) : (
               <button
-                className="group mt-auto flex w-full items-center justify-center gap-3 rounded-3xl bg-gradient-to-r from-indigo-500 via-teal-500 to-emerald-400 px-6 py-5 text-base font-extrabold text-white shadow-2xl shadow-indigo-500/25 transition hover:scale-[1.012] hover:shadow-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-45 disabled:shadow-none"
+                className="group flex w-full flex-shrink-0 items-center justify-center gap-3 rounded-3xl bg-gradient-to-r from-indigo-500 via-teal-500 to-emerald-400 px-6 py-4 text-base font-extrabold text-white shadow-2xl shadow-indigo-500/25 transition hover:scale-[1.012] hover:shadow-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-45 disabled:shadow-none"
                 onClick={handleGenerate}
                 disabled={modelStatus !== "ready"}
               >
@@ -1125,7 +1197,7 @@ export default function App() {
             )}
           </article>
 
-          <article className="glass-panel flex min-h-[720px] flex-col gap-5 p-5">
+          <article className="glass-panel flex min-h-[650px] flex-col gap-4 p-4 xl:min-h-0 xl:overflow-y-auto">
             <StepHeader number="3" title="Kết quả & xuất file" subtitle="Nghe lại, tải WAV và theo dõi hiệu năng khi audio sẵn sàng." icon={<Headphones className="h-6 w-6" />} />
 
             {outputAudioData ? (
@@ -1145,12 +1217,11 @@ export default function App() {
                     idPrefix="output-player"
                     downloadFileName="voice-clone-output.wav"
                     variant="output"
-                    showShareButton
                   />
                 </div>
 
                 <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-4">
-                  <div className="mb-4 flex items-center justify-between">
+                  <div className="mb-3 flex items-center justify-between">
                     <div>
                       <div className="text-sm font-bold text-white">Performance Metrics</div>
                       <div className="text-xs text-zinc-500">Runtime feedback từ sidecar</div>
@@ -1168,13 +1239,13 @@ export default function App() {
                 </div>
               </>
             ) : (
-              <div className="flex flex-1 flex-col items-center justify-center rounded-3xl border border-dashed border-white/15 bg-white/[0.03] p-8 text-center">
-                <div className="rounded-full border border-white/10 bg-white/[0.06] p-5 text-zinc-400">
-                  <AudioLines className="h-10 w-10" />
+              <div className="flex min-h-[260px] flex-col items-center justify-center rounded-3xl border border-dashed border-white/15 bg-white/[0.03] p-5 text-center">
+                <div className="rounded-full border border-white/10 bg-white/[0.06] p-4 text-zinc-400">
+                  <AudioLines className="h-8 w-8" />
                 </div>
-                <h3 className="mt-5 text-lg font-bold text-white">Chưa có audio đầu ra</h3>
+                <h3 className="mt-4 text-base font-bold text-white">Chưa có audio đầu ra</h3>
                 <p className="mt-2 max-w-sm text-sm text-zinc-500">Sau khi model hoàn tất, waveform player và metrics sẽ xuất hiện tại đây.</p>
-                <div className="mt-5 grid w-full max-w-sm grid-cols-2 gap-3">
+                <div className="mt-4 grid w-full max-w-sm grid-cols-2 gap-3">
                   <MetricTile label="RTF" value="—" />
                   <MetricTile label="Elapsed" value="—" />
                 </div>
@@ -1186,8 +1257,11 @@ export default function App() {
 
       <footer className="z-20 border-t border-white/10 bg-zinc-950/70 px-5 py-2 backdrop-blur-md">
         <div className="mx-auto flex max-w-[1800px] items-center justify-between gap-3 text-xs text-zinc-400">
-          <div className="flex min-w-0 items-center gap-4">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1">
             <span className="flex items-center gap-2"><Cpu className="h-4 w-4 text-emerald-300" /> {currentDeviceName}</span>
+            <span className="hidden items-center gap-2 sm:flex"><Activity className="h-4 w-4 text-indigo-300" /> CPU {formatUsagePercent(systemUsage?.cpu_percent)}</span>
+            <span className="hidden items-center gap-2 md:flex"><MemoryStick className="h-4 w-4 text-teal-300" /> RAM {formatUsagePercent(systemUsage?.ram_percent)}</span>
+            <span className="hidden items-center gap-2 lg:flex"><Gauge className="h-4 w-4 text-amber-300" /> GPU {formatUsagePercent(systemUsage?.gpu_percent)}</span>
             <span className="hidden items-center gap-2 sm:flex"><Activity className="h-4 w-4 text-indigo-300" /> Runs: {metrics ? `${metrics.elapsedSeconds.toFixed(1)}s` : "idle"}</span>
             <span className="hidden items-center gap-2 md:flex"><Gauge className="h-4 w-4 text-teal-300" /> {metrics ? `RTF ${metrics.rtf.toFixed(2)}` : "RTF —"}</span>
           </div>
@@ -1220,7 +1294,7 @@ export default function App() {
                 <select
                   className="w-full rounded-2xl border border-white/10 bg-zinc-900/90 p-3 text-sm font-semibold text-white outline-none focus:border-emerald-300/50 focus:ring-4 focus:ring-emerald-400/10"
                   value={selectedDevice}
-                  onChange={(e) => setSelectedDevice(e.target.value)}
+                  onChange={(e) => handleDeviceChange(e.target.value)}
                   disabled={isDeviceSelectionDisabled}
                 >
                   <option value="auto">{devicesStatus === "loading" ? "Đang phát hiện thiết bị..." : "Auto"}</option>
@@ -1267,20 +1341,20 @@ export default function App() {
       )}
 
       {isLogsOpen && (
-        <div className="fixed inset-x-0 bottom-0 z-50 border-t border-white/10 bg-zinc-950/95 p-4 shadow-2xl shadow-black/60 backdrop-blur-md">
-          <div className="mx-auto max-w-[1800px]">
-            <div className="mb-3 flex items-center justify-between">
+        <div className="fixed inset-0 z-50 flex items-end bg-black/45 p-3 backdrop-blur-sm sm:p-5" onClick={() => setIsLogsOpen(false)}>
+          <div className="mx-auto flex max-h-[82vh] w-full max-w-[1800px] flex-col rounded-3xl border border-white/10 bg-zinc-950/95 p-4 shadow-2xl shadow-black/60" onClick={(event) => event.stopPropagation()}>
+            <div className="mb-3 flex flex-shrink-0 items-center justify-between">
               <div className="flex items-center gap-2 text-sm font-bold text-white"><Terminal className="h-4 w-4 text-emerald-300" /> System Logs & Diagnostics</div>
               <button className="rounded-full border border-white/10 bg-white/[0.06] p-2 text-zinc-300 hover:text-white" onClick={() => setIsLogsOpen(false)} aria-label="Đóng logs">
                 <X className="h-4 w-4" />
               </button>
             </div>
-            <div className="grid max-h-[44vh] grid-cols-1 gap-4 md:grid-cols-[1.4fr_1fr]">
-              <div className="min-h-0 overflow-y-auto rounded-2xl border border-white/10 bg-black p-4 font-mono text-xs leading-6 text-emerald-300">
+            <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-hidden md:grid-cols-[1.4fr_1fr]">
+              <div className="min-h-[220px] overflow-y-auto rounded-2xl border border-white/10 bg-black p-4 font-mono text-xs leading-6 text-emerald-300 md:min-h-0">
                 {logs.length > 0 ? logs.map((log, index) => <div key={`${log}-${index}`}>{log}</div>) : <div className="text-zinc-600">Đang chờ log từ runtime...</div>}
                 <div ref={consoleEndRef} />
               </div>
-              <div className="grid grid-cols-2 gap-3 overflow-y-auto">
+              <div className="grid max-h-[32vh] grid-cols-2 gap-3 overflow-y-auto pr-1 md:max-h-none">
                 <MetricTile label="Ref duration" value={formatDiagnosticSeconds(referenceDiagnostics?.reference_raw_duration_seconds)} />
                 <MetricTile label="Processed" value={formatDiagnosticSeconds(referenceDiagnostics?.reference_processed_duration_seconds)} />
                 <MetricTile label="RMS" value={formatDiagnosticNumber(referenceDiagnostics?.reference_processed_rms, 3)} />
@@ -1292,16 +1366,6 @@ export default function App() {
           </div>
         </div>
       )}
-
-      <div className="pointer-events-none fixed bottom-16 right-8 hidden rounded-full border border-emerald-300/20 bg-emerald-400/10 p-3 text-emerald-200 shadow-2xl shadow-emerald-950/40 lg:block">
-        <Sparkles className="h-5 w-5" />
-      </div>
-      <div className="pointer-events-none fixed left-8 top-24 hidden rounded-full border border-indigo-300/20 bg-indigo-400/10 p-3 text-indigo-200 shadow-2xl shadow-indigo-950/40 lg:block">
-        <Bot className="h-5 w-5" />
-      </div>
-      <div className="pointer-events-none fixed right-24 top-24 hidden rounded-full border border-teal-300/20 bg-teal-400/10 p-3 text-teal-200 shadow-2xl shadow-teal-950/40 lg:block">
-        <Zap className="h-5 w-5" />
-      </div>
     </main>
   );
 }

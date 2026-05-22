@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FC, PointerEvent } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
 import {
-  BookmarkPlus,
   Download,
   Loader2,
   Pause,
@@ -22,7 +23,6 @@ interface AudioPlayerProps {
   idPrefix?: string;
   downloadFileName?: string;
   variant?: "reference" | "output";
-  showShareButton?: boolean;
 }
 
 const PLAYBACK_RATES = [1.0, 1.2, 1.5, 2.0, 0.75, 0.85];
@@ -42,7 +42,6 @@ export const AudioPlayer: FC<AudioPlayerProps> = ({
   idPrefix = "audio-player",
   downloadFileName,
   variant = "reference",
-  showShareButton = false,
 }) => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -55,6 +54,7 @@ export const AudioPlayer: FC<AudioPlayerProps> = ({
   const [isMuted, setIsMuted] = useState(false);
   const [volume, setVolume] = useState(0.9);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   const [cropStart, setCropStart] = useState<number | null>(null);
   const [cropEnd, setCropEnd] = useState<number | null>(null);
@@ -450,8 +450,29 @@ export const AudioPlayer: FC<AudioPlayerProps> = ({
     }
   };
 
-  const handleSave = () => {
-    // Placeholder for future native save/share integration. Download remains the export path.
+  const handleDownload = async () => {
+    if (!currentAudioData || isProcessing || !downloadFileName) return;
+
+    try {
+      setIsSaving(true);
+      const selectedPath = await save({
+        title: "Lưu file WAV",
+        defaultPath: downloadFileName,
+        filters: [{ name: "WAV audio", extensions: ["wav"] }],
+      });
+      if (!selectedPath) return;
+
+      const wavBytes = new Uint8Array(await convertToWavBlob(currentAudioData, sampleRate).arrayBuffer());
+      await invoke("save_audio_file", {
+        path: selectedPath,
+        bytes: Array.from(wavBytes),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      alert(`Không thể lưu file WAV: ${message}`);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -526,24 +547,15 @@ export const AudioPlayer: FC<AudioPlayerProps> = ({
 
         <div className="ml-auto flex items-center gap-2">
           {downloadFileName && (
-            <a
+            <button
+              type="button"
               className="player-icon-button"
-              href={audioUrl || undefined}
-              download={downloadFileName}
-              aria-disabled={!audioUrl || isProcessing}
-              onClick={(e) => {
-                if (!audioUrl || isProcessing) e.preventDefault();
-              }}
+              disabled={!currentAudioData || isProcessing || isSaving}
+              onClick={handleDownload}
               aria-label="Tải WAV"
-              title="Tải WAV"
+              title="Chọn nơi lưu WAV"
             >
-              <Download className="h-4 w-4" />
-            </a>
-          )}
-
-          {showShareButton && (
-            <button className="player-icon-button" onClick={handleSave} disabled={!audioUrl || isProcessing} title="Share / Save">
-              <BookmarkPlus className="h-4 w-4" />
+              {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
             </button>
           )}
         </div>

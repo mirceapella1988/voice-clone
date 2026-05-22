@@ -66,6 +66,10 @@ class SidecarApp:
         self.cancel_event = threading.Event()
         self.inference_thread = None
         self.is_generating = False
+        self.generation_lock = threading.Lock()
+        self.generation_id = 0
+        self.cancelled_generation_ids = set()
+        self.heartbeat_stop = None
 
     def on_progress(self, status, progress):
         send_json({
@@ -131,9 +135,25 @@ class SidecarApp:
 
         return ref_audio_np, ref_sample_rate, metadata
 
-    def run_inference(self, text, ref_audio, ref_text, instruct, params):
-        self.is_generating = True
-        self.cancel_event.clear()
+    def is_generation_cancelled(self, generation_id):
+        with self.generation_lock:
+            return generation_id in self.cancelled_generation_ids
+
+    def stop_current_generation(self):
+        self.cancel_event.set()
+        with self.generation_lock:
+            generation_id = self.generation_id
+            is_generating = self.is_generating
+            if is_generating:
+                self.cancelled_generation_ids.add(generation_id)
+            heartbeat_stop = self.heartbeat_stop
+
+        if heartbeat_stop is not None:
+            heartbeat_stop.set()
+
+        return is_generating
+
+    def run_inference(self, generation_id, text, ref_audio, ref_text, instruct, params):
         params = params or {}
         diagnostics = {}
         
@@ -144,7 +164,14 @@ class SidecarApp:
             self.on_progress("Decoding reference audio...", 0.05)
             ref_audio_np, ref_sample_rate, diagnostics = self.decode_reference_audio(ref_audio, params)
 
+            if self.is_generation_cancelled(generation_id):
+                raise InterruptedError("Stopped")
+
             heartbeat_thread = self.start_progress_heartbeat(heartbeat_stop, start_time)
+            with self.generation_lock:
+                if generation_id == self.generation_id:
+                    self.heartbeat_stop = heartbeat_stop
+
             audio, sample_rate = self.runtime.generate(
                 text=text,
                 ref_audio=ref_audio_np,
@@ -153,6 +180,9 @@ class SidecarApp:
                 params={**params, "ref_sample_rate": ref_sample_rate},
                 cancel_flag=self.cancel_flag
             )
+
+            if self.is_generation_cancelled(generation_id):
+                raise InterruptedError("Stopped")
 
             # Chuyển đổi output audio sang base64 WAV
             int_audio = np.clip(audio, -1.0, 1.0)
@@ -180,6 +210,9 @@ class SidecarApp:
             tokens_per_sec = tokens_generated / elapsed if elapsed > 0 else 0
             diagnostics = {**diagnostics, **getattr(self.runtime, "last_diagnostics", {})}
 
+            if self.is_generation_cancelled(generation_id):
+                raise InterruptedError("Stopped")
+
             send_json({
                 "type": "complete",
                 "audio_base64": audio_base64,
@@ -194,11 +227,14 @@ class SidecarApp:
             })
 
         except InterruptedError:
-            send_json({
-                "type": "stopped",
-                "message": "Generation stopped by user request."
-            })
+            if not self.is_generation_cancelled(generation_id):
+                send_json({
+                    "type": "stopped",
+                    "message": "Generation stopped by user request."
+                })
         except OmniVoiceValidationError as e:
+            if self.is_generation_cancelled(generation_id):
+                return
             diagnostics = {**diagnostics, **getattr(self.runtime, "last_diagnostics", {})}
             send_json({
                 "type": "error",
@@ -206,6 +242,8 @@ class SidecarApp:
                 "diagnostics": diagnostics
             })
         except Exception as e:
+            if self.is_generation_cancelled(generation_id):
+                return
             traceback.print_exc()
             diagnostics = {**diagnostics, **getattr(self.runtime, "last_diagnostics", {})}
             send_json({
@@ -217,7 +255,11 @@ class SidecarApp:
             heartbeat_stop.set()
             if heartbeat_thread is not None:
                 heartbeat_thread.join(timeout=1.0)
-            self.is_generating = False
+            with self.generation_lock:
+                if generation_id == self.generation_id:
+                    self.is_generating = False
+                    self.heartbeat_stop = None
+                self.cancelled_generation_ids.discard(generation_id)
 
     def handle_command(self, line):
         line = line.strip()
@@ -266,9 +308,14 @@ class SidecarApp:
                 })
 
             elif cmd == "generate":
-                if self.is_generating:
-                    send_json({"type": "error", "message": "Already generating speech. Send 'stop' first."})
-                    return
+                with self.generation_lock:
+                    if self.is_generating:
+                        send_json({"type": "error", "message": "Already generating speech. Send 'stop' first."})
+                        return
+                    self.generation_id += 1
+                    generation_id = self.generation_id
+                    self.is_generating = True
+                    self.cancel_event.clear()
 
                 text = data.get("text", "")
                 ref_audio = data.get("ref_audio")
@@ -282,14 +329,22 @@ class SidecarApp:
                 })
                 self.inference_thread = threading.Thread(
                     target=self.run_inference,
-                    args=(text, ref_audio, ref_text, instruct, params),
+                    args=(generation_id, text, ref_audio, ref_text, instruct, params),
                     daemon=True
                 )
                 self.inference_thread.start()
 
             elif cmd == "stop":
-                self.cancel_event.set()
-                send_json({"type": "status", "status": "stopping"})
+                if self.stop_current_generation():
+                    send_json({
+                        "type": "stopped",
+                        "message": "Generation stopped by user request."
+                    })
+                else:
+                    send_json({
+                        "type": "stopped",
+                        "message": "No active generation to stop."
+                    })
 
             else:
                 send_json({"type": "error", "message": f"Unknown command: {cmd}"})

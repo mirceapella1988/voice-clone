@@ -5,12 +5,25 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
+use serde::Serialize;
+use sysinfo::System;
 use tauri::{Emitter, Manager, State};
 
 struct SidecarState {
     child: Mutex<Option<std::process::Child>>,
     stdin: Mutex<Option<std::process::ChildStdin>>,
     startup_error: Mutex<Option<String>>,
+}
+
+struct SystemMetricsState {
+    system: Mutex<System>,
+}
+
+#[derive(Serialize)]
+struct SystemUsage {
+    cpu_percent: f32,
+    ram_percent: f32,
+    gpu_percent: Option<f32>,
 }
 
 fn resolve_sidecar_script(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -236,6 +249,97 @@ fn send_to_sidecar(state: State<'_, SidecarState>, msg: String) -> Result<(), St
     }
 }
 
+#[tauri::command]
+fn save_audio_file(path: String, bytes: Vec<u8>) -> Result<(), String> {
+    if bytes.is_empty() {
+        return Err("Refusing to save an empty audio file".to_string());
+    }
+
+    let mut path = PathBuf::from(path);
+    if path.extension().and_then(|extension| extension.to_str()) != Some("wav") {
+        path.set_extension("wav");
+    }
+
+    std::fs::write(&path, bytes)
+        .map_err(|e| format!("Failed to save WAV file {}: {e}", path.display()))
+}
+
+fn read_nvidia_gpu_usage() -> Option<f32> {
+    let mut command = Command::new("nvidia-smi");
+    command.args([
+        "--query-gpu=utilization.gpu",
+        "--format=csv,noheader,nounits",
+    ]);
+    hide_subprocess_window(&mut command);
+
+    let output = command.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.trim().parse::<f32>().ok())
+}
+
+fn parse_percent_metric(output: &str, key: &str) -> Option<f32> {
+    let needle = format!("\"{key}\"=");
+    output.match_indices(&needle).filter_map(|(index, _)| {
+        let value_start = index + needle.len();
+        let value = output[value_start..]
+            .chars()
+            .take_while(|ch| ch.is_ascii_digit() || *ch == '.')
+            .collect::<String>();
+        value.parse::<f32>().ok()
+    }).max_by(|left, right| left.total_cmp(right))
+}
+
+#[cfg(target_os = "macos")]
+fn read_apple_gpu_usage() -> Option<f32> {
+    let output = Command::new("ioreg")
+        .args(["-r", "-d", "1", "-w", "0", "-c", "IOAccelerator"])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_percent_metric(&stdout, "Device Utilization %")
+        .or_else(|| parse_percent_metric(&stdout, "Renderer Utilization %"))
+        .or_else(|| parse_percent_metric(&stdout, "Tiler Utilization %"))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn read_apple_gpu_usage() -> Option<f32> {
+    None
+}
+
+fn read_gpu_usage() -> Option<f32> {
+    read_apple_gpu_usage().or_else(read_nvidia_gpu_usage)
+}
+
+#[tauri::command]
+fn get_system_usage(state: State<'_, SystemMetricsState>) -> Result<SystemUsage, String> {
+    let mut system = state.system.lock().map_err(|e| e.to_string())?;
+    system.refresh_memory();
+    system.refresh_cpu_usage();
+
+    let total_memory = system.total_memory();
+    let ram_percent = if total_memory > 0 {
+        (system.used_memory() as f32 / total_memory as f32) * 100.0
+    } else {
+        0.0
+    };
+
+    Ok(SystemUsage {
+        cpu_percent: system.global_cpu_usage(),
+        ram_percent,
+        gpu_percent: read_gpu_usage(),
+    })
+}
+
 fn emit_sidecar_message(app_handle: &tauri::AppHandle, event_type: &str, message: &str) {
     let payload = serde_json::json!({
         "type": event_type,
@@ -258,7 +362,7 @@ fn hide_subprocess_window(_command: &mut Command) {}
 
 #[cfg(test)]
 mod tests {
-    use super::prepend_path_dir;
+    use super::{parse_percent_metric, prepend_path_dir};
     use std::path::Path;
     use std::process::Command;
 
@@ -277,16 +381,35 @@ mod tests {
 
         assert!(path.starts_with("/tmp/voiceclone-ffmpeg"));
     }
+
+    #[test]
+    fn parse_percent_metric_reads_macos_ioreg_gpu_utilization() {
+        let output = r#""PerformanceStatistics" = {"Tiler Utilization %"=20,"Renderer Utilization %"=29,"Device Utilization %"=33}"#;
+
+        assert_eq!(parse_percent_metric(output, "Device Utilization %"), Some(33.0));
+        assert_eq!(parse_percent_metric(output, "Renderer Utilization %"), Some(29.0));
+    }
+
+    #[test]
+    fn parse_percent_metric_uses_highest_value_when_multiple_gpus_exist() {
+        let output = r#""Device Utilization %"=12 "Device Utilization %"=47"#;
+
+        assert_eq!(parse_percent_metric(output, "Device Utilization %"), Some(47.0));
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(SidecarState {
             child: Mutex::new(None),
             stdin: Mutex::new(None),
             startup_error: Mutex::new(None),
+        })
+        .manage(SystemMetricsState {
+            system: Mutex::new(System::new_all()),
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
@@ -298,6 +421,8 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            get_system_usage,
+            save_audio_file,
             send_to_sidecar,
             start_runtime_sidecar,
             setup::check_runtime,

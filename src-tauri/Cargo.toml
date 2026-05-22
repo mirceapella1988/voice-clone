@@ -1,6 +1,6 @@
 [package]
 name = "tauri-app"
-version = "0.4.13"
+version = "0.5.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -27,3 +27,5 @@ zip = "2.0"
 tokio = { version = "1", features = ["fs", "io-util", "process", "time"] }
 tar = "0.4"
 flate2 = "1"
+tauri-plugin-dialog = "2.7.1"
+sysinfo = "0.39.2"

@@ -452,6 +452,23 @@ class SidecarReferenceAudioTests(unittest.TestCase):
         self.assertIn("Invalid JSON command:", message["message"])
         self.assertNotIn("command command", message["message"])
 
+    def test_stop_command_emits_stopped_and_stops_heartbeat(self):
+        app = SidecarApp()
+        output = io.StringIO()
+        heartbeat_stop = threading.Event()
+        app.is_generating = True
+        app.generation_id = 7
+        app.heartbeat_stop = heartbeat_stop
+
+        with patch("sys.stdout", output):
+            app.handle_command('{"command":"stop"}\n')
+
+        message = json.loads(output.getvalue())
+        self.assertEqual(message["type"], "stopped")
+        self.assertTrue(app.cancel_event.is_set())
+        self.assertTrue(heartbeat_stop.is_set())
+        self.assertIn(7, app.cancelled_generation_ids)
+
     def test_read_next_command_reads_content_length_frame(self):
         payload = json.dumps({
             "command": "generate",
