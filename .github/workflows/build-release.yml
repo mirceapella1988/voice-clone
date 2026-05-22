@@ -20,7 +20,7 @@ jobs:
           - platform: "macos-latest"
             args: "--target aarch64-apple-darwin"
           - platform: "windows-latest"
-            args: "--bundles nsis"
+            args: ""
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -35,10 +35,6 @@ jobs:
         shell: bash
         run: |
           pip install -r src-python/requirements.txt
-          # Note: GitHub-hosted Windows runners do not have NVIDIA GPUs available,
-          # so we cannot run nvidia-smi detection here. We always install the latest
-          # CUDA wheel (cu128) for the release build so the app can use CUDA when
-          # a compatible NVIDIA driver is present on the user's machine.
           if [ "${{ matrix.platform }}" = "windows-latest" ]; then
             pip install --force-reinstall --index-url https://download.pytorch.org/whl/cu128 torch==2.8.0+cu128 torchaudio==2.8.0+cu128
           fi
@@ -62,7 +58,6 @@ jobs:
           PYINSTALLER_ARGS=(
             --clean
             -y
-            --onefile
             --distpath src-tauri/binaries
             --collect-all omnivoice
             --collect-all torch
@@ -77,10 +72,43 @@ jobs:
             --collect-all hf_xet
             --hidden-import transformers.models.qwen3
           )
+          mkdir -p src-tauri/target/release
           if [ "${{ matrix.platform }}" = "windows-latest" ]; then
-            pyinstaller "${PYINSTALLER_ARGS[@]}" --name sidecar-x86_64-pc-windows-msvc src-python/sidecar.py
+            pyinstaller "${PYINSTALLER_ARGS[@]}" --onedir --name sidecar-x86_64-pc-windows-msvc src-python/sidecar.py
+            
+            # Clean up redundant development files
+            find src-tauri/binaries/sidecar-x86_64-pc-windows-msvc -name "*.lib" -delete
+            find src-tauri/binaries/sidecar-x86_64-pc-windows-msvc -name "*.h" -delete
+            find src-tauri/binaries/sidecar-x86_64-pc-windows-msvc -name "*.hpp" -delete
+            
+            # Remove redundant / unused CUDA and cuDNN DLLs to significantly reduce bundle size
+            rm -f src-tauri/binaries/sidecar-x86_64-pc-windows-msvc/_internal/torch/lib/cudnn_adv64_9.dll
+            rm -f src-tauri/binaries/sidecar-x86_64-pc-windows-msvc/_internal/torch/lib/cusolverMg64_11.dll
+            rm -f src-tauri/binaries/sidecar-x86_64-pc-windows-msvc/_internal/torch/lib/nvrtc64_120_0.alt.dll
+            rm -f src-tauri/binaries/sidecar-x86_64-pc-windows-msvc/_internal/torch/lib/curand64_10.dll
+            rm -f src-tauri/binaries/sidecar-x86_64-pc-windows-msvc/_internal/torch/lib/nvrtc-builtins64_128.dll
+            rm -f src-tauri/binaries/sidecar-x86_64-pc-windows-msvc/_internal/torch/lib/uv.dll
+            rm -f src-tauri/binaries/sidecar-x86_64-pc-windows-msvc/_internal/torch/lib/cufftw64_11.dll
+            rm -f src-tauri/binaries/sidecar-x86_64-pc-windows-msvc/_internal/torch/lib/zlibwapi.dll
+            rm -f src-tauri/binaries/sidecar-x86_64-pc-windows-msvc/_internal/torch/lib/libiompstubs5md.dll
+            rm -f src-tauri/binaries/sidecar-x86_64-pc-windows-msvc/_internal/torch/lib/caffe2_nvrtc.dll
+            
+            # Compress the real Windows sidecar folder into a zip
+            powershell.exe -Command "Compress-Archive -Path 'src-tauri/binaries/sidecar-x86_64-pc-windows-msvc' -DestinationPath 'src-tauri/target/release/VoiceClone-Sidecar-Windows.zip' -Force"
+            
+            # Remove real sidecar and replace with a small dummy file to satisfy Tauri verification
+            rm -rf src-tauri/binaries/sidecar-x86_64-pc-windows-msvc
+            touch src-tauri/binaries/sidecar-x86_64-pc-windows-msvc.exe
           else
-            pyinstaller "${PYINSTALLER_ARGS[@]}" --name sidecar-aarch64-apple-darwin src-python/sidecar.py
+            pyinstaller "${PYINSTALLER_ARGS[@]}" --onefile --name sidecar-aarch64-apple-darwin src-python/sidecar.py
+            
+            # Compress the real macOS sidecar into a zip
+            zip -j src-tauri/target/release/VoiceClone-Sidecar-MacOS.zip src-tauri/binaries/sidecar-aarch64-apple-darwin
+            
+            # Remove real sidecar and replace with a small dummy file to satisfy Tauri verification
+            rm -f src-tauri/binaries/sidecar-aarch64-apple-darwin
+            touch src-tauri/binaries/sidecar-aarch64-apple-darwin
+            chmod +x src-tauri/binaries/sidecar-aarch64-apple-darwin
           fi
           du -sh src-tauri/binaries 2>/dev/null || true
 
@@ -189,7 +217,43 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Voice Clone v__VERSION__"
-          releaseBody: "Bản phát hành tự động cho Voice Clone. Installer không bundle OmniVoice model files; app downloads k2-fsa/OmniVoice from https://huggingface.co/k2-fsa/OmniVoice on first model load and caches them in the user's app data directory. Windows ships one installer with PyTorch CUDA support: it uses CUDA when the machine has a compatible NVIDIA CUDA runtime available, and falls back to CPU otherwise. macOS public distribution requires Apple Developer ID signing and notarization; otherwise the draft build is ad-hoc signed for internal testing."
+          releaseBody: "Bản phát hành tự động cho Voice Clone. Ứng dụng không đi kèm sẵn model weights mà sẽ tự động tải từ Hugging Face trong lần chạy đầu tiên và lưu vào cache. Bản Windows được phân phối dưới dạng duy nhất 1 bản Portable ZIP (CUDA + CPU Auto-Detect) hoặc Installer, tự động tải bộ thư viện AI động (~2.5GB) khi cài đặt hoặc chạy lần đầu, tự động nhận diện và sử dụng GPU/CUDA nếu có, ngược lại tự động fallback về CPU."
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      - name: Create Portable Zip (Windows only)
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        run: |
+          PORTABLE_DIR="src-tauri/target/release/VoiceClone-Portable"
+          rm -rf "$PORTABLE_DIR"
+          mkdir -p "$PORTABLE_DIR"
+          cp "src-tauri/target/release/tauri-app.exe" "$PORTABLE_DIR/Voice Clone.exe"
+          mkdir -p "$PORTABLE_DIR/binaries"
+          
+          # Giải nén sidecar zip thực tế chứa đầy đủ thư viện Python và ffmpeg vào thư mục binaries
+          powershell.exe -Command "Expand-Archive -Path 'src-tauri/target/release/VoiceClone-Sidecar-Windows.zip' -DestinationPath '$PORTABLE_DIR/binaries'"
+          
+          # Compress the portable directory to ZIP using powershell Compress-Archive
+          powershell.exe -Command "Compress-Archive -Path '$PORTABLE_DIR/*' -DestinationPath 'src-tauri/target/release/VoiceClone-Portable.zip' -Force"
+
+      - name: Upload Sidecar Zip to Release
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ matrix.platform }}" = "windows-latest" ]; then
+            gh release upload "${{ github.ref_name }}" src-tauri/target/release/VoiceClone-Sidecar-Windows.zip --clobber
+          else
+            gh release upload "${{ github.ref_name }}" src-tauri/target/release/VoiceClone-Sidecar-MacOS.zip --clobber
+          fi
+
+      - name: Upload Portable Zip to Release (Windows only)
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Use github CLI to upload the portable zip directly to the release draft
+          gh release upload "${{ github.ref_name }}" src-tauri/target/release/VoiceClone-Portable.zip --clobber

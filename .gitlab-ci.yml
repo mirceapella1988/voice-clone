@@ -74,9 +74,6 @@ windows_build:
       if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
         choco install -y rustup.install --no-progress
       }
-      if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
-        choco install -y nsis --no-progress
-      }
 
       if ($env:ChocolateyInstall -and (Test-Path "$env:ChocolateyInstall\helpers\chocolateyProfile.psm1")) {
         Import-Module "$env:ChocolateyInstall\helpers\chocolateyProfile.psm1"
@@ -94,8 +91,9 @@ windows_build:
     expire_in: 30 days
     when: always
     paths:
-      - src-tauri/binaries/sidecar-x86_64-pc-windows-msvc.exe
-      - src-tauri/target/release/bundle/nsis/*.exe
+      - src-tauri/target/release/VoiceClone-Portable.zip
+      - src-tauri/target/release/VoiceClone-Portable-Light.zip
+      - src-tauri/target/release/VoiceClone-Sidecar-Windows.zip
 
 gitlab_release:
   stage: release
@@ -117,7 +115,7 @@ gitlab_release:
       version="${CI_COMMIT_TAG#v}"
       package_name="voice-clone"
       files_list="$(mktemp)"
-      find src-tauri/target -type f \( -name "*.dmg" -o -name "*.exe" -o -name "*.msi" \) 2>/dev/null | sort -u > "$files_list"
+      find src-tauri/target -type f \( -name "*.dmg" -o -name "*.zip" \) 2>/dev/null | sort -u > "$files_list"
 
       if [ ! -s "$files_list" ]; then
         echo "No release installers found in build artifacts."

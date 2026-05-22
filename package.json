@@ -1,11 +1,12 @@
 {
   "name": "tauri-app",
   "private": true,
-  "version": "0.4.6",
+  "version": "0.4.7",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
+    "prepare": "node scripts/prepare-binaries.js",
+    "dev": "node scripts/download-ffmpeg.js && node scripts/prepare-binaries.js && vite",
+    "build": "node scripts/download-ffmpeg.js && node scripts/prepare-binaries.js && tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri"
   },

@@ -1,4 +1,5 @@
 import sys
+import os
 import json
 import base64
 import time
@@ -8,7 +9,47 @@ import threading
 import traceback
 import numpy as np
 
+# Add the directory containing the sidecar executable/bundled ffmpeg to PATH so that
+# subprocess calls (like pydub calling ffmpeg) can locate the bundled ffmpeg.
+if getattr(sys, 'frozen', False):
+    # PyInstaller package environment (Production)
+    current_dir = os.path.dirname(sys.executable)
+    os.environ["PATH"] = current_dir + os.pathsep + os.environ.get("PATH", "")
+else:
+    # Development environment (npm run tauri dev)
+    # Find the downloaded ffmpeg static binary in src-tauri/binaries
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    root_dir = os.path.dirname(script_dir)
+    
+    import platform
+    system = platform.system().lower()
+    machine = platform.machine().lower()
+    
+    triple = None
+    if system == "windows":
+        triple = "x86_64-pc-windows-msvc"
+    elif system == "darwin":
+        if machine == "arm64" or machine == "aarch64":
+            triple = "aarch64-apple-darwin"
+        else:
+            triple = "x86_64-apple-darwin"
+            
+    if triple:
+        dev_ffmpeg_dir = os.path.join(root_dir, "src-tauri", "binaries", f"sidecar-{triple}")
+        if os.path.exists(dev_ffmpeg_dir):
+            os.environ["PATH"] = dev_ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
+
 from omnivoice_runtime import OmniVoiceRuntime, OmniVoiceValidationError, get_available_hardware_devices
+
+# Pre-import heavy packages in the main thread to prevent deadlocks (Loader Lock)
+# when importing them dynamically inside a background thread on Windows.
+try:
+    import torch
+    import omnivoice
+except ImportError:
+    pass
+
+
 
 # Lock để đồng bộ hóa việc ghi ra stdout
 stdout_lock = threading.Lock()

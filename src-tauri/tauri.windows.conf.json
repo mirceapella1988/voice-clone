@@ -1,0 +1,8 @@
+{
+  "bundle": {
+    "targets": [],
+    "resources": {
+      "binaries/sidecar-x86_64-pc-windows-msvc/**/*": "binaries/sidecar-x86_64-pc-windows-msvc/"
+    }
+  }
+}

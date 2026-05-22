@@ -115,6 +115,15 @@ const normalizeSearchText = (value: string) =>
   value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
 export default function App() {
+  // Setup loader states
+  const [sidecarInstalled, setSidecarInstalled] = useState<boolean | null>(null);
+  const [installStatus, setInstallStatus] = useState<"idle" | "connecting" | "downloading" | "extracting" | "completed" | "error">("idle");
+  const [installProgress, setInstallProgress] = useState(0);
+  const [installSpeed, setInstallSpeed] = useState(0); // MB/s
+  const [installDownloaded, setInstallDownloaded] = useState(0); // bytes
+  const [installTotal, setInstallTotal] = useState(0); // bytes
+  const [installMessage, setInstallMessage] = useState("");
+
   // Model state
   const [modelStatus, setModelStatus] = useState<"unloaded" | "loading" | "ready">("unloaded");
   const [modelProgress, setModelProgress] = useState(0);
@@ -187,14 +196,12 @@ export default function App() {
         }
 
         const arrayBuffer = bytes.buffer;
-        // Decode WAV header to get PCM raw float data
         const dataView = new DataView(arrayBuffer);
         const sampleRate = dataView.getUint32(24, true);
         const numChannels = dataView.getUint16(22, true);
         const blockAlign = dataView.getUint16(32, true);
         const bitsPerSample = dataView.getUint16(34, true);
 
-        // WAV data offset usually starts at index 44
         const dataOffset = 44;
         const dataBytes = arrayBuffer.byteLength - dataOffset;
         const samplesCount = dataBytes / (bitsPerSample / 8);
@@ -204,7 +211,6 @@ export default function App() {
         if (bitsPerSample === 16) {
           let floatIdx = 0;
           for (let i = dataOffset; i < arrayBuffer.byteLength; i += blockAlign) {
-            // Lấy channel 0 (mono)
             const val = dataView.getInt16(i, true);
             floatData[floatIdx++] = val / 32768.0;
           }
@@ -218,7 +224,7 @@ export default function App() {
     });
   };
 
-  // WAV header generator helper for Float32Array (to send base64 to sidecar)
+  // WAV header generator helper for Float32Array
   const convertToWavBlob = (buffer: Float32Array, sRate: number): Blob => {
     const length = buffer.length * 2 + 44;
     const bufferArr = new ArrayBuffer(length);
@@ -280,10 +286,9 @@ export default function App() {
     return mono;
   };
 
-  // Manual WAV parser fallback (khi AudioContext không hoạt động)
+  // Manual WAV parser fallback
   const parseWavManual = (buffer: ArrayBuffer): { data: Float32Array; sampleRate: number } => {
     const view = new DataView(buffer);
-    // Validate RIFF header
     const riff = String.fromCharCode(view.getUint8(0), view.getUint8(1), view.getUint8(2), view.getUint8(3));
     if (riff !== "RIFF") throw new Error("Not a valid WAV file");
 
@@ -293,10 +298,8 @@ export default function App() {
     const blockAlign = view.getUint16(32, true);
     const bytesPerSample = bitsPerSample / 8;
 
-    // Find data chunk
     let dataOffset = 44;
     let dataSize = buffer.byteLength - 44;
-    // Try to find actual 'data' subchunk
     let offset = 12;
     while (offset + 8 < buffer.byteLength) {
       const chunkId = String.fromCharCode(
@@ -365,14 +368,12 @@ export default function App() {
       arrayBuffer = await urlOrFile.arrayBuffer();
     }
 
-    // Try AudioContext first (supports many formats)
     try {
       if (!audioContextRef.current) {
         audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
       }
       const audioCtx = audioContextRef.current;
       if (audioCtx) {
-        // Clone buffer vì decodeAudioData detach gốc
         const bufferCopy = arrayBuffer.slice(0);
         const audioBuffer = await Promise.race([
           audioCtx.decodeAudioData(bufferCopy),
@@ -389,12 +390,87 @@ export default function App() {
       console.warn("AudioContext decode failed, trying manual WAV parser:", err);
     }
 
-    // Fallback: manual WAV parsing
     return parseWavManual(arrayBuffer);
+  };
+
+  // Check if sidecar is installed on startup
+  useEffect(() => {
+    invoke<boolean>("check_sidecar_installed")
+      .then((installed) => {
+        setSidecarInstalled(installed);
+        if (installed) {
+          appendLog("Sidecar đã được cài đặt và sẵn sàng.");
+        } else {
+          appendLog("Chưa tìm thấy thư viện AI. Gợi ý tải bộ thư viện AI sidecar.");
+        }
+      })
+      .catch((err) => {
+        appendLog(`Lỗi kiểm tra Sidecar: ${err}`);
+        setSidecarInstalled(false);
+      });
+  }, []);
+
+  const handleDownloadAndInstall = async () => {
+    setInstallStatus("connecting");
+    setInstallMessage("Đang kết nối tới máy chủ...");
+    setInstallProgress(0);
+    setInstallSpeed(0);
+    setInstallDownloaded(0);
+    setInstallTotal(0);
+
+    try {
+      const unlistenProgress = await listen<string>("download-progress", (event) => {
+        try {
+          const data = JSON.parse(event.payload);
+          if (data.type === "connecting") {
+            setInstallStatus("connecting");
+            setInstallMessage(data.message || "Đang kết nối...");
+          } else if (data.type === "downloading") {
+            setInstallStatus("downloading");
+            setInstallProgress(data.percent || 0);
+            setInstallSpeed(data.speed || 0);
+            setInstallDownloaded(data.downloaded || 0);
+            setInstallTotal(data.total || 0);
+          } else if (data.type === "extracting") {
+            setInstallStatus("extracting");
+            setInstallMessage(data.message || "Đang giải nén bộ thư viện...");
+            setInstallProgress(100);
+          } else if (data.type === "completed") {
+            setInstallStatus("completed");
+            setInstallMessage(data.message || "Cài đặt thành công!");
+            unlistenProgress();
+            
+            invoke("start_sidecar_dynamically")
+              .then(() => {
+                appendLog("Sidecar started dynamically after download.");
+                setSidecarInstalled(true);
+              })
+              .catch((err) => {
+                appendLog(`Lỗi khởi chạy Sidecar động: ${err}`);
+                setInstallStatus("error");
+                setInstallMessage(`Không thể khởi chạy Sidecar: ${err}`);
+              });
+          } else if (data.type === "error") {
+            setInstallStatus("error");
+            setInstallMessage(data.message || "Lỗi trong quá trình tải xuống.");
+            unlistenProgress();
+          }
+        } catch (e) {
+          console.error("Lỗi phân tích cú pháp tiến độ tải:", e);
+        }
+      });
+
+      await invoke("download_and_install_sidecar");
+    } catch (err: any) {
+      setInstallStatus("error");
+      setInstallMessage(err.message || String(err));
+    }
   };
 
   // Listen to Tauri events from sidecar
   useEffect(() => {
+    if (!sidecarInstalled) return;
+
     let disposed = false;
     let unlisten: (() => void) | null = null;
     let deviceTimer: number | null = null;
@@ -527,7 +603,7 @@ export default function App() {
       }
       if (unlisten) unlisten();
     };
-  }, []);
+  }, [sidecarInstalled]);
 
   const handlePresetSelect = async (preset: PresetVoice) => {
     setSelectedPresetId(preset.id);
@@ -537,12 +613,10 @@ export default function App() {
 
     try {
       appendLog(`Loading preset ${preset.name}...`);
-      // Fetch text
       const txtRes = await fetch(preset.text);
       const textVal = await txtRes.text();
       setRefText(textVal);
 
-      // Decode audio
       const audioRes = await decodeWavFile(preset.audio);
       setRefAudioData(audioRes.data);
       setRefSampleRate(audioRes.sampleRate);
@@ -713,6 +787,7 @@ export default function App() {
   };
 
   const consoleEndRef = useRef<HTMLDivElement | null>(null);
+
   useEffect(() => {
     consoleEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [logs]);
@@ -725,6 +800,96 @@ export default function App() {
 
   const isDeviceSelectionDisabled = devicesStatus === "loading" || modelStatus !== "unloaded";
   const isLoadModelDisabled = devicesStatus === "loading";
+
+  if (sidecarInstalled === null) {
+    return (
+      <div className="setup-fullscreen-bg">
+        <div className="setup-glass-card">
+          <img className="setup-logo pulse" src={voiceCloneIcon} alt="Voice Clone" />
+          <h2>Voice Clone AI</h2>
+          <p className="subtitle" style={{ color: "var(--text-secondary)", fontSize: "0.82rem" }}>Đang kiểm tra cấu hình môi trường...</p>
+          <div className="setup-spinner-wrapper" style={{ marginTop: "10px" }}>
+            <svg className="spinner-icon" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" strokeLinecap="round"/>
+            </svg>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (sidecarInstalled === false) {
+    return (
+      <div className="setup-fullscreen-bg">
+        <div className="setup-glass-card error-card" style={{ borderTop: "4px solid var(--accent-red)" }}>
+          <img className="setup-logo" src={voiceCloneIcon} alt="Voice Clone" />
+          <h2 style={{ color: "var(--accent-red)" }}>Không Tìm Thấy Thư Viện AI</h2>
+          
+          <div className="setup-intro" style={{ textAlign: "left", fontSize: "0.88rem", lineHeight: "1.5" }}>
+            <p>Ứng dụng Voice Clone yêu cầu thư viện AI Sidecar đi kèm để hoạt động trực tiếp và bảo mật trên máy tính của bạn.</p>
+            
+            <div style={{
+              background: "rgba(255, 255, 255, 0.03)",
+              border: "1px solid rgba(255, 255, 255, 0.08)",
+              borderRadius: "8px",
+              padding: "12px",
+              marginTop: "12px",
+              color: "var(--text-secondary)"
+            }}>
+              <strong style={{ color: "var(--text-primary)", display: "block", marginBottom: "6px" }}>Hướng dẫn sửa lỗi:</strong>
+              <ul style={{ margin: 0, paddingLeft: "16px" }}>
+                <li>Đảm bảo bạn đã giải nén toàn bộ tệp ZIP bản <strong>Portable Full</strong>.</li>
+                <li>Không di chuyển file <code>Voice Clone.exe</code> ra ngoài thư mục đã giải nén.</li>
+                <li>Thư mục <code>binaries/</code> phải nằm cùng cấp với file chạy <code>Voice Clone.exe</code>.</li>
+              </ul>
+            </div>
+          </div>
+
+          <div className="setup-actions" style={{ marginTop: "20px" }}>
+            {installStatus === "connecting" || installStatus === "downloading" || installStatus === "extracting" ? (
+              <div className="setup-progress-container" style={{ width: "100%" }}>
+                <div className="setup-progress-track" style={{ height: "6px", background: "rgba(255,255,255,0.1)", borderRadius: "3px", overflow: "hidden" }}>
+                  <div className="setup-progress-fill" style={{ width: `${installProgress}%`, height: "100%", background: "var(--accent-blue)", transition: "width 0.3s ease" }}></div>
+                </div>
+                <div className="setup-progress-info" style={{ display: "flex", justifyContent: "space-between", marginTop: "6px", fontSize: "0.8rem", color: "var(--text-secondary)" }}>
+                  <span>{installMessage}</span>
+                  {installStatus === "downloading" && installTotal > 0 && (
+                    <span>{(installDownloaded / (1024 * 1024)).toFixed(1)} / {(installTotal / (1024 * 1024)).toFixed(1)} MB · {installSpeed.toFixed(2)} MB/s</span>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: "8px", width: "100%" }}>
+                {installStatus === "error" && (
+                  <div className="error-icon-wrapper" style={{ color: "var(--accent-red)", fontSize: "0.85rem", textAlign: "center", marginBottom: "4px" }}>
+                    {installMessage || "Có lỗi xảy ra trong quá trình cài đặt."}
+                  </div>
+                )}
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <button className="btn-primary" onClick={handleDownloadAndInstall} style={{ flex: 1 }}>
+                    ⬇️ Tải và Cài đặt
+                  </button>
+                  <button
+                    className="btn-secondary"
+                    onClick={async () => {
+                      setSidecarInstalled(null);
+                      const installed = await invoke<boolean>("check_sidecar_installed");
+                      setSidecarInstalled(installed);
+                      if (installed) {
+                        appendLog("Sidecar đã được kết nối sau khi quét lại.");
+                      }
+                    }}
+                  >
+                    🔄 Quét lại
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <main className="app-shell">
