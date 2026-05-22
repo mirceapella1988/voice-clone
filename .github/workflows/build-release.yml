@@ -35,6 +35,10 @@ jobs:
         shell: bash
         run: |
           pip install -r src-python/requirements.txt
+          # Note: GitHub-hosted Windows runners do not have NVIDIA GPUs available,
+          # so we cannot run nvidia-smi detection here. We always install the latest
+          # CUDA wheel (cu128) for the release build so the app can use CUDA when
+          # a compatible NVIDIA driver is present on the user's machine.
           if [ "${{ matrix.platform }}" = "windows-latest" ]; then
             pip install --force-reinstall --index-url https://download.pytorch.org/whl/cu128 torch==2.8.0+cu128 torchaudio==2.8.0+cu128
           fi

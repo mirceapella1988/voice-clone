@@ -108,9 +108,29 @@ def is_mps_available(torch_module):
     return bool(mps and mps.is_available())
 
 
+def _check_nvidia_smi():
+    """Check if nvidia-smi is available and return basic GPU info."""
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,driver_version", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            parts = result.stdout.strip().split(", ")
+            gpu_name = parts[0] if parts else "Unknown"
+            driver_ver = parts[1] if len(parts) > 1 else "Unknown"
+            return {"available": True, "gpu": gpu_name, "driver": driver_ver}
+        return {"available": True, "gpu": "Unknown", "driver": "Unknown"}
+    except Exception:
+        return {"available": False}
+
+
 def get_available_hardware_devices(torch_loader=import_torch):
     devices = [{"id": "cpu", "name": "CPU (Mac dinh)"}]
     auto_detect = "cpu"
+    diagnostics = {"torch_available": False}
 
     try:
         torch_module = torch_loader()
@@ -119,15 +139,35 @@ def get_available_hardware_devices(torch_loader=import_torch):
         import sys
         print(f"Error loading torch: {e}", file=sys.stderr)
         traceback.print_exc(file=sys.stderr)
+        diagnostics["error"] = str(e)
         return {
             "devices": devices,
             "auto_detect": auto_detect,
-            "diagnostics": {"torch_available": False, "error": str(e)},
+            "diagnostics": diagnostics,
         }
 
-    if getattr(torch_module, "cuda", None) and torch_module.cuda.is_available():
+    diagnostics["torch_available"] = True
+
+    cuda_module = getattr(torch_module, "cuda", None)
+    if cuda_module is not None and cuda_module.is_available():
         devices.append({"id": "cuda", "name": "NVIDIA GPU (CUDA)"})
         auto_detect = "cuda"
+    elif cuda_module is not None:
+        # CUDA module exists but is not available; gather extra diagnostics
+        nsmi = _check_nvidia_smi()
+        diagnostics["cuda_available_in_torch"] = False
+        diagnostics["cuda_module_present"] = True
+        diagnostics["nvidia_smi"] = nsmi
+        if nsmi.get("available"):
+            diagnostics["gpu_hint"] = (
+                "nvidia-smi reports a GPU, but torch.cuda.is_available() is False. "
+                "This usually means the PyTorch CUDA wheel does not match the CUDA driver version, "
+                "or required CUDA runtime DLLs are missing."
+            )
+        else:
+            diagnostics["gpu_hint"] = "nvidia-smi not found; no NVIDIA GPU detected or drivers not installed."
+    else:
+        diagnostics["cuda_module_present"] = False
 
     if is_mps_available(torch_module):
         devices.append({"id": "mps", "name": "Apple Silicon (MPS)"})
@@ -137,7 +177,7 @@ def get_available_hardware_devices(torch_loader=import_torch):
     return {
         "devices": devices,
         "auto_detect": auto_detect,
-        "diagnostics": {"torch_available": True},
+        "diagnostics": diagnostics,
     }
 
 

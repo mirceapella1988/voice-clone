@@ -143,8 +143,8 @@ Both jobs build a PyInstaller sidecar first, assert that model files are not bun
 Push a version tag:
 
 ```bash
-git tag -a v0.4.5 -m "Release v0.4.5"
-git push origin v0.4.5
+git tag -a v0.4.6 -m "Release v0.4.6"
+git push origin v0.4.6
 ```
 
 Or run **Build & Release** manually from the GitHub Actions UI.
@@ -201,7 +201,7 @@ The GitLab pipeline is tag/manual only so normal pushes do not spend runner minu
    - `npm run build -- --clearScreen false`
    - `cd src-tauri && cargo test`
 3. Commit the version and source changes.
-4. Create and push a tag like `v0.4.5`.
+4. Create and push a tag like `v0.4.6`.
 5. Let GitHub Actions build the installers, or use local scripts if GitHub-hosted runners are unavailable.
 
 ## Troubleshooting

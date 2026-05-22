@@ -249,12 +249,23 @@ pub fn run() {
             let mut sidecar_candidates = Vec::new();
             if cfg!(debug_assertions) {
                 if let Ok(current_dir) = std::env::current_dir() {
-                    if current_dir.ends_with("src-tauri") {
+                    // Case-insensitive check for "src-tauri" (important on Windows where
+                    // path casing may vary).
+                    let in_src_tauri = current_dir
+                        .components()
+                        .last()
+                        .and_then(|c| c.as_os_str().to_str())
+                        .map_or(false, |name| name.eq_ignore_ascii_case("src-tauri"));
+                    if in_src_tauri {
                         if let Some(parent) = current_dir.parent() {
                             push_sidecar_candidate(&mut sidecar_candidates, parent.join("src-python").join("sidecar.py"));
                         }
                     }
                     push_sidecar_candidate(&mut sidecar_candidates, current_dir.join("src-python").join("sidecar.py"));
+                    // Also try from the Cargo.toml manifest directory (works when cwd is project root or src-tauri)
+                    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+                        push_sidecar_candidate(&mut sidecar_candidates, PathBuf::from(&manifest_dir).parent().unwrap_or(Path::new("")).join("src-python").join("sidecar.py"));
+                    }
                 }
             }
             if let Ok(current_exe) = std::env::current_exe() {
@@ -353,8 +364,29 @@ pub fn run() {
                 cmd.spawn()
             } else {
                 // Chạy script python (chế độ dev)
-                let mut python3 = Command::new("python3");
-                python3
+                // On Windows prefer `py` or `python`; on Unix prefer `python3`.
+                fn is_python_available(cmd: &str) -> bool {
+                    Command::new(cmd).arg("--version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok()
+                }
+
+                let python_cmd = if cfg!(target_os = "windows") {
+                    if is_python_available("py") {
+                        "py"
+                    } else if is_python_available("python") {
+                        "python"
+                    } else {
+                        "python3"
+                    }
+                } else {
+                    if is_python_available("python3") {
+                        "python3"
+                    } else {
+                        "python"
+                    }
+                };
+
+                let mut python = Command::new(python_cmd);
+                python
                     .arg(&sidecar_path)
                     .stdin(Stdio::piped())
                     .stdout(Stdio::piped())
@@ -362,40 +394,16 @@ pub fn run() {
                     .env("PYTHONUNBUFFERED", "1")
                     .env("PYTHONIOENCODING", "utf-8");
                 if let Some(resource_dir) = &resource_dir {
-                    python3.env("APP_RESOURCES_DIR", resource_dir);
+                    python.env("APP_RESOURCES_DIR", resource_dir);
                 }
                 if let Some(model_dir) = &app_model_dir {
-                    python3.env("APP_MODEL_DIR", model_dir);
+                    python.env("APP_MODEL_DIR", model_dir);
                 }
                 if let Some(dir) = &sidecar_dir {
-                    python3.current_dir(dir);
+                    python.current_dir(dir);
                 }
-                hide_subprocess_window(&mut python3);
-                let spawn_res = python3.spawn();
-
-                if spawn_res.is_err() {
-                    let mut python = Command::new("python");
-                    python
-                        .arg(&sidecar_path)
-                        .stdin(Stdio::piped())
-                        .stdout(Stdio::piped())
-                        .stderr(Stdio::piped())
-                        .env("PYTHONUNBUFFERED", "1")
-                        .env("PYTHONIOENCODING", "utf-8");
-                    if let Some(resource_dir) = &resource_dir {
-                        python.env("APP_RESOURCES_DIR", resource_dir);
-                    }
-                    if let Some(model_dir) = &app_model_dir {
-                        python.env("APP_MODEL_DIR", model_dir);
-                    }
-                    if let Some(dir) = &sidecar_dir {
-                        python.current_dir(dir);
-                    }
-                    hide_subprocess_window(&mut python);
-                    python.spawn()
-                } else {
-                    spawn_res
-                }
+                hide_subprocess_window(&mut python);
+                python.spawn()
             };
 
             match child_process {

@@ -23,26 +23,64 @@ if (-not (Get-Command cargo  -ErrorAction SilentlyContinue))  { err "cargo not f
 # ── [1/4] Python dependencies ──────────────────────────────────────────────
 log "[1/4] Installing Python dependencies..."
 
-# Detect CUDA availability. The base requirements install CPU/MPS wheels; NVIDIA
-# Windows builds override PyTorch with CUDA wheels before packaging.
+# Detect CUDA availability and version via nvidia-smi.
+# Maps the installed driver CUDA version to the closest compatible PyTorch wheel.
+# The base requirements install CPU/MPS wheels; NVIDIA Windows builds
+# override PyTorch with CUDA wheels before packaging.
 $hasCuda = $ForceCuda
+$cudaWheel = $null
 if (-not $hasCuda) {
     $nvidiaSmi = Get-Command "nvidia-smi" -ErrorAction SilentlyContinue
     if ($nvidiaSmi) {
-        $cudaVer = & nvidia-smi 2>&1 | Select-String "CUDA Version"
-        if ($cudaVer) {
-            warn "NVIDIA GPU detected. PyTorch CUDA wheels will be installed."
-            $hasCuda = $true
+        # Parse exact CUDA version reported by nvidia-smi
+        $cudaVerMatch = & nvidia-smi 2>&1 | Select-String "CUDA Version\s*:\s*([0-9]+\.[0-9]+)"
+        if ($cudaVerMatch) {
+            $cudaVersion = $cudaVerMatch.Matches[0].Groups[1].Value
+            log "NVIDIA GPU detected. CUDA Version: $cudaVersion"
+
+            # Additional GPU info for diagnostics
+            $gpuName = & nvidia-smi --query-gpu=name --format=csv,noheader 2>$null
+            if ($gpuName) { log "GPU: $($gpuName.Trim())" }
+            $driverVer = & nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>$null
+            if ($driverVer) { log "Driver: $($driverVer.Trim())" }
+
+            # Map CUDA driver version to PyTorch wheel index
+            if ([version]$cudaVersion -ge [version]"12.4") {
+                $cudaWheel = "cu128"
+            } elseif ([version]$cudaVersion -ge [version]"12.0") {
+                $cudaWheel = "cu124"
+            } elseif ([version]$cudaVersion -ge [version]"11.8") {
+                $cudaWheel = "cu118"
+            } else {
+                warn "CUDA version $cudaVersion is older than 11.8. PyTorch CUDA wheels may not be available; falling back to CPU build."
+            }
+
+            if ($cudaWheel) {
+                $hasCuda = $true
+                log "Selected PyTorch CUDA wheel: $cudaWheel"
+            }
+        } else {
+            warn "nvidia-smi found but CUDA Version not detected in output. Skipping CUDA install."
         }
+    } else {
+        warn "nvidia-smi not found. Build will be CPU-only."
     }
 }
 
 pip install -q -r src-python/requirements.txt
 if ($LASTEXITCODE -ne 0) { err "Failed to install Python requirements." }
 
-if ($hasCuda) {
+if ($hasCuda -and $cudaWheel) {
+    log "Installing PyTorch CUDA wheels ($cudaWheel)..."
+    pip install -q --force-reinstall --index-url "https://download.pytorch.org/whl/$cudaWheel" torch==2.8.0+$cudaWheel torchaudio==2.8.0+$cudaWheel
+    if ($LASTEXITCODE -ne 0) { err "Failed to install CUDA PyTorch packages." }
+    ok "CUDA PyTorch wheels installed ($cudaWheel)"
+} elseif ($ForceCuda) {
+    # ForceCuda without a GPU present (e.g., CI build): default to cu128 as before
+    log "ForceCuda enabled without detected GPU. Installing default CUDA wheels (cu128)..."
     pip install -q --force-reinstall --index-url https://download.pytorch.org/whl/cu128 torch==2.8.0+cu128 torchaudio==2.8.0+cu128
     if ($LASTEXITCODE -ne 0) { err "Failed to install CUDA PyTorch packages." }
+    ok "CUDA PyTorch wheels installed (cu128)"
 }
 pip install -q pyinstaller
 if ($LASTEXITCODE -ne 0) { err "Failed to install PyInstaller." }
