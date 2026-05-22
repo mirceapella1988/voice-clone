@@ -42,16 +42,7 @@ pub fn get_base_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
 }
 
 pub fn models_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
-    if cfg!(target_os = "windows") {
-        return Ok(get_base_dir(app_handle)?.join("models"));
-    }
-
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .filter(|path| !path.as_os_str().is_empty())
-        .ok_or_else(|| "Failed to resolve user home directory for folder cache".to_string())?;
-
-    Ok(home.join(".voiceclone").join("models"))
+    Ok(get_base_dir(app_handle)?.join("models"))
 }
 
 pub fn python_path(base: &Path) -> PathBuf {

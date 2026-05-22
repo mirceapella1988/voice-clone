@@ -86,7 +86,7 @@ def default_model_cache_dir():
         root = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
         if root:
             return str(PureWindowsPath(root) / "Voice Clone" / "models")
-    return str(Path.home() / ".voiceclone" / "models")
+    return str(Path.home() / "Library" / "Application Support" / "Voice Clone" / "models")
 
 
 def normalize_language_id(language_id):

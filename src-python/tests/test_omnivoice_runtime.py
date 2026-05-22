@@ -177,11 +177,11 @@ class RuntimeLoadTests(unittest.TestCase):
             self.assertEqual(runtime.actual_device, "cpu")
             self.assertEqual(FakeOmniVoice.load_kwargs["dtype"], fake_torch.float32)
 
-    def test_default_model_cache_dir_uses_voiceclone_home_directory(self):
+    def test_default_model_cache_dir_uses_macos_app_data(self):
         with patch.object(omnivoice_runtime.Path, "home", return_value=Path("/Users/example")):
             self.assertEqual(
                 default_model_cache_dir(),
-                str(Path("/Users/example/.voiceclone/models")),
+                str(Path("/Users/example/Library/Application Support/Voice Clone/models")),
             )
 
     def test_default_model_cache_dir_uses_windows_app_data(self):

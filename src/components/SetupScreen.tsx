@@ -10,7 +10,7 @@ const formatRuntimePath = (modelsPath?: string) => {
   if (navigator.platform.toLowerCase().includes("win")) {
     return "%LOCALAPPDATA%\\Voice Clone\\models";
   }
-  return "~/.voiceclone/models";
+  return "~/Library/Application Support/Voice Clone/models";
 };
 
 export function SetupScreen({ setup }: SetupScreenProps) {
