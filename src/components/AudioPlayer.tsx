@@ -1,4 +1,18 @@
-import React, { useRef, useEffect, useState, useCallback } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { FC, PointerEvent } from "react";
+import {
+  BookmarkPlus,
+  Download,
+  Loader2,
+  Pause,
+  Play,
+  RefreshCcw,
+  RotateCcw,
+  RotateCw,
+  Scissors,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
 
 interface AudioPlayerProps {
   audioData: Float32Array | null;
@@ -7,17 +21,28 @@ interface AudioPlayerProps {
   label?: string;
   idPrefix?: string;
   downloadFileName?: string;
+  variant?: "reference" | "output";
+  showShareButton?: boolean;
 }
 
 const PLAYBACK_RATES = [1.0, 1.2, 1.5, 2.0, 0.75, 0.85];
 
-export const AudioPlayer: React.FC<AudioPlayerProps> = ({
+const formatTime = (secs: number) => {
+  if (!Number.isFinite(secs) || secs <= 0) return "0:00";
+  const m = Math.floor(secs / 60);
+  const s = Math.floor(secs % 60);
+  return `${m}:${String(s).padStart(2, "0")}`;
+};
+
+export const AudioPlayer: FC<AudioPlayerProps> = ({
   audioData,
   sampleRate = 24000,
   onCrop,
   label = "Audio Player",
   idPrefix = "audio-player",
   downloadFileName,
+  variant = "reference",
+  showShareButton = false,
 }) => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -28,6 +53,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   const [duration, setDuration] = useState(0);
   const [playbackRate, setPlaybackRate] = useState(1.0);
   const [isMuted, setIsMuted] = useState(false);
+  const [volume, setVolume] = useState(0.9);
   const [isProcessing, setIsProcessing] = useState(false);
 
   const [cropStart, setCropStart] = useState<number | null>(null);
@@ -39,11 +65,10 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [currentAudioData, setCurrentAudioData] = useState<Float32Array | null>(null);
   const [originalAudioData, setOriginalAudioData] = useState<Float32Array | null>(null);
-
-  // Precomputed waveform peaks for fast drawing
   const [waveformPeaks, setWaveformPeaks] = useState<Float32Array | null>(null);
 
-  // Ghi file WAV từ Float32Array — chunked để không block UI
+  const canCrop = Boolean(onCrop);
+
   const convertToWavBlob = useCallback((buffer: Float32Array, sRate: number): Blob => {
     const length = buffer.length * 2 + 44;
     const bufferArr = new ArrayBuffer(length);
@@ -78,7 +103,6 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     return new Blob([view], { type: "audio/wav" });
   }, []);
 
-  // Precompute waveform peaks (downsampled) for fast rendering
   const computeWaveformPeaks = useCallback((samples: Float32Array, numBars: number): Float32Array => {
     const peaks = new Float32Array(numBars);
     const step = Math.max(1, Math.floor(samples.length / numBars));
@@ -95,20 +119,24 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     return peaks;
   }, []);
 
-  // Đồng bộ hóa với prop audioData đầu vào
   useEffect(() => {
     if (audioData) {
       setOriginalAudioData(audioData);
       setCurrentAudioData(audioData);
+      setCurrentTime(0);
+      setDuration(0);
+      setCropStart(null);
+      setCropEnd(null);
     } else {
       setOriginalAudioData(null);
       setCurrentAudioData(null);
       setAudioUrl(null);
       setWaveformPeaks(null);
+      setCurrentTime(0);
+      setDuration(0);
     }
   }, [audioData]);
 
-  // Tạo URL + Waveform khi currentAudioData thay đổi (deferred)
   useEffect(() => {
     if (!currentAudioData) {
       setAudioUrl(null);
@@ -118,14 +146,11 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
 
     setIsProcessing(true);
 
-    // Defer heavy work to next frame so React can render loading state
     const timeoutId = setTimeout(() => {
       try {
-        // Compute waveform peaks first (lighter)
-        const peaks = computeWaveformPeaks(currentAudioData, 300);
+        const peaks = computeWaveformPeaks(currentAudioData, 360);
         setWaveformPeaks(peaks);
 
-        // Then create WAV blob (heavier)
         const blob = convertToWavBlob(currentAudioData, sampleRate);
         const url = URL.createObjectURL(blob);
 
@@ -145,14 +170,19 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     };
   }, [currentAudioData, sampleRate, convertToWavBlob, computeWaveformPeaks]);
 
-  // Cleanup URL on unmount
   useEffect(() => {
     return () => {
       if (audioUrl) URL.revokeObjectURL(audioUrl);
     };
-  }, []);
+  }, [audioUrl]);
 
-  // Vẽ Waveform
+  useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.volume = volume;
+      audioRef.current.muted = isMuted;
+    }
+  }, [volume, isMuted]);
+
   const drawWaveform = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -162,7 +192,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
 
     const dpr = window.devicePixelRatio || 1;
     const width = canvas.parentElement?.clientWidth || 720;
-    const height = 64;
+    const height = 86;
 
     const pixelWidth = Math.round(width * dpr);
     const pixelHeight = Math.round(height * dpr);
@@ -175,16 +205,17 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
 
-    // Background
-    ctx.fillStyle = "#131825";
+    const background = ctx.createLinearGradient(0, 0, width, height);
+    background.addColorStop(0, variant === "output" ? "rgba(6, 78, 59, 0.42)" : "rgba(24, 24, 27, 0.92)");
+    background.addColorStop(1, "rgba(17, 24, 39, 0.92)");
+    ctx.fillStyle = background;
     ctx.fillRect(0, 0, width, height);
 
     const centerY = height / 2;
 
-    // Center line
     ctx.save();
-    ctx.setLineDash([1, 4]);
-    ctx.strokeStyle = "rgba(226, 232, 240, 0.2)";
+    ctx.setLineDash([2, 6]);
+    ctx.strokeStyle = "rgba(226, 232, 240, 0.16)";
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(0, centerY);
@@ -196,79 +227,77 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     const progressX = width * Math.max(0, Math.min(1, progress));
 
     const barGap = 3;
-    const barWidth = 2;
+    const barWidth = 2.5;
     const stride = barWidth + barGap;
     const barCount = Math.max(1, Math.floor(width / stride));
+    const activeGradient = ctx.createLinearGradient(0, 0, width, 0);
+    activeGradient.addColorStop(0, "#818cf8");
+    activeGradient.addColorStop(0.55, "#2dd4bf");
+    activeGradient.addColorStop(1, "#34d399");
 
     ctx.lineCap = "round";
     ctx.lineWidth = barWidth;
 
     if (waveformPeaks) {
-      // Use precomputed peaks
       const peakStep = waveformPeaks.length / barCount;
       for (let i = 0; i < barCount; i++) {
         const x = i * stride + barWidth;
         const peakIdx = Math.min(waveformPeaks.length - 1, Math.floor(i * peakStep));
         const peak = waveformPeaks[peakIdx];
-        const amp = Math.max(2, peak * height * 0.43);
+        const amp = Math.max(3, peak * height * 0.42);
 
-        ctx.strokeStyle = x <= progressX ? "#9d8ff8" : "#555d74";
-        ctx.globalAlpha = 0.9;
+        ctx.strokeStyle = x <= progressX ? activeGradient : "rgba(161, 161, 170, 0.45)";
+        ctx.globalAlpha = x <= progressX ? 1 : 0.72;
         ctx.beginPath();
         ctx.moveTo(x, centerY - amp);
         ctx.lineTo(x, centerY + amp);
         ctx.stroke();
       }
     } else {
-      // Placeholder bars
       for (let i = 0; i < barCount; i++) {
         const x = i * stride + barWidth;
-        ctx.strokeStyle = "#555d74";
-        ctx.globalAlpha = 0.25;
+        ctx.strokeStyle = "rgba(161, 161, 170, 0.2)";
+        ctx.globalAlpha = 0.4;
         ctx.beginPath();
-        ctx.moveTo(x, centerY - 3);
-        ctx.lineTo(x, centerY + 3);
+        ctx.moveTo(x, centerY - 4);
+        ctx.lineTo(x, centerY + 4);
         ctx.stroke();
       }
     }
 
     ctx.globalAlpha = 1.0;
 
-    // Crop region
     if (cropStart !== null && cropEnd !== null) {
       const startX = Math.min(cropStart, cropEnd) * width;
       const endX = Math.max(cropStart, cropEnd) * width;
 
-      ctx.fillStyle = "rgba(124, 109, 240, 0.15)";
-      ctx.fillRect(startX, 2, endX - startX, height - 4);
+      ctx.fillStyle = "rgba(52, 211, 153, 0.14)";
+      ctx.fillRect(startX, 4, endX - startX, height - 8);
 
-      ctx.strokeStyle = "rgba(157, 143, 248, 0.8)";
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.moveTo(startX, 2);
-      ctx.lineTo(startX, height - 2);
-      ctx.moveTo(endX, 2);
-      ctx.lineTo(endX, height - 2);
-      ctx.stroke();
-    }
-
-    // Playback cursor
-    if (duration && progressX > 0) {
-      ctx.strokeStyle = "#7c6df0";
+      ctx.strokeStyle = "rgba(110, 231, 183, 0.9)";
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.moveTo(progressX, 4);
-      ctx.lineTo(progressX, height - 4);
+      ctx.moveTo(startX, 5);
+      ctx.lineTo(startX, height - 5);
+      ctx.moveTo(endX, 5);
+      ctx.lineTo(endX, height - 5);
       ctx.stroke();
     }
-  }, [waveformPeaks, currentTime, duration, cropStart, cropEnd]);
 
-  // Re-draw waveform khi thay đổi
+    if (duration && progressX > 0) {
+      ctx.strokeStyle = "#c4b5fd";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(progressX, 5);
+      ctx.lineTo(progressX, height - 5);
+      ctx.stroke();
+    }
+  }, [waveformPeaks, currentTime, duration, cropStart, cropEnd, variant]);
+
   useEffect(() => {
     drawWaveform();
   }, [drawWaveform]);
 
-  // ResizeObserver vẽ lại khi đổi kích thước màn hình
   useEffect(() => {
     const element = containerRef.current;
     if (!element) return;
@@ -283,7 +312,6 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     };
   }, [drawWaveform]);
 
-  // Audio event handlers
   const handleTimeUpdate = () => {
     if (audioRef.current) {
       setCurrentTime(audioRef.current.currentTime);
@@ -320,6 +348,13 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     setIsMuted(audio.muted);
   };
 
+  const handleVolumeChange = (nextVolume: number) => {
+    setVolume(nextVolume);
+    if (nextVolume > 0 && isMuted) {
+      setIsMuted(false);
+    }
+  };
+
   const handleSpeedChange = () => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -335,8 +370,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     audio.currentTime = Math.max(0, Math.min(duration, audio.currentTime + seconds));
   };
 
-  // Crop pointer handlers
-  const readCanvasRatio = (e: React.PointerEvent<HTMLCanvasElement>): number => {
+  const readCanvasRatio = (e: PointerEvent<HTMLCanvasElement>): number => {
     const canvas = canvasRef.current;
     if (!canvas) return 0;
     const rect = canvas.getBoundingClientRect();
@@ -344,8 +378,8 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     return Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
   };
 
-  const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!currentAudioData) return;
+  const handlePointerDown = (e: PointerEvent<HTMLCanvasElement>) => {
+    if (!currentAudioData || !canCrop) return;
     const ratio = readCanvasRatio(e);
     setSelectingCrop(true);
     setCropMoved(false);
@@ -355,15 +389,15 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     canvasRef.current?.setPointerCapture(e.pointerId);
   };
 
-  const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!selectingCrop || pointerStartRatio === null) return;
+  const handlePointerMove = (e: PointerEvent<HTMLCanvasElement>) => {
+    if (!selectingCrop || pointerStartRatio === null || !canCrop) return;
     const ratio = readCanvasRatio(e);
     setCropEnd(ratio);
     setCropMoved(Math.abs(ratio - pointerStartRatio) > 0.01);
   };
 
-  const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!selectingCrop) return;
+  const handlePointerUp = (e: PointerEvent<HTMLCanvasElement>) => {
+    if (!selectingCrop || !canCrop) return;
     setSelectingCrop(false);
     canvasRef.current?.releasePointerCapture(e.pointerId);
 
@@ -416,37 +450,32 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     }
   };
 
-  const formatTime = (secs: number) => {
-    if (!Number.isFinite(secs) || secs <= 0) return "0:00";
-    const m = Math.floor(secs / 60);
-    const s = Math.floor(secs % 60);
-    return `${m}:${String(s).padStart(2, "0")}`;
+  const handleSave = () => {
+    // Placeholder for future native save/share integration. Download remains the export path.
   };
 
   return (
     <div className="audio-player-container" ref={containerRef}>
-      <div className="audio-player-header">
-        <span className="audio-player-label">{label}</span>
-        <span className="audio-player-time">
-          {isProcessing ? "Đang xử lý..." : `${formatTime(currentTime)} / ${formatTime(duration)}`}
-        </span>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="text-sm font-bold text-white">{label}</div>
+          <div className="mt-1 font-mono text-xs text-zinc-500">{isProcessing ? "Đang xử lý waveform..." : `${formatTime(currentTime)} / ${formatTime(duration)}`}</div>
+        </div>
+        <div className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 font-mono text-xs text-zinc-400">
+          {sampleRate} Hz
+        </div>
       </div>
 
       <div className="audio-player-waveform-wrapper">
         {isProcessing && (
-          <div style={{
-            position: "absolute",
-            inset: 0,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            background: "rgba(19, 24, 37, 0.9)",
-            zIndex: 2,
-            borderRadius: "6px",
-            fontSize: "0.72rem",
-            color: "#7a839a"
-          }}>
+          <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-zinc-950/80 text-xs font-semibold text-zinc-400 backdrop-blur-sm">
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
             Đang tải âm thanh...
+          </div>
+        )}
+        {!audioData && !isProcessing && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl text-xs font-semibold text-zinc-600">
+            Chưa có waveform
           </div>
         )}
         <canvas
@@ -456,103 +485,79 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
           aria-label="Audio waveform"
-          style={{ cursor: currentAudioData ? "crosshair" : "default" }}
+          style={{ cursor: currentAudioData && canCrop ? "crosshair" : "pointer" }}
         />
       </div>
 
-      <div className="audio-player-controls">
+      <div className="flex flex-wrap items-center gap-2">
         <button
           id={`${idPrefix}-play`}
-          className="btn-control btn-play"
+          className="flex h-11 w-11 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-emerald-400 text-white shadow-lg shadow-indigo-500/25 transition hover:scale-105 disabled:cursor-not-allowed disabled:opacity-40"
           onClick={handlePlayPause}
           disabled={!audioUrl || isProcessing}
           title={isPlaying ? "Pause" : "Play"}
         >
-          {isPlaying ? (
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-              <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
-            </svg>
-          ) : (
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-              <path d="M8 5v14l11-7z" />
-            </svg>
-          )}
+          {isPlaying ? <Pause className="h-5 w-5 fill-current" /> : <Play className="h-5 w-5 fill-current" />}
         </button>
 
-        <button
-          className="btn-control"
-          onClick={() => handleSeek(-5)}
-          disabled={!audioUrl || isProcessing}
-          title="Back 5s"
-        >
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-            <path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z" />
-          </svg>
+        <button className="player-icon-button" onClick={() => handleSeek(-5)} disabled={!audioUrl || isProcessing} title="Lùi 5s">
+          <RotateCcw className="h-4 w-4" />
         </button>
-
-        <button
-          className="btn-control"
-          onClick={() => handleSeek(5)}
-          disabled={!audioUrl || isProcessing}
-          title="Forward 5s"
-        >
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-            <path d="M18 13c0 3.31-2.69 6-6 6s-6-2.69-6-6 2.69-6 6-6v4l5-5-5-5v4c-4.42 0-8 3.58-8 8s3.58 8 8 8 8-3.58 8-8h-2z" />
-          </svg>
+        <button className="player-icon-button" onClick={() => handleSeek(5)} disabled={!audioUrl || isProcessing} title="Tới 5s">
+          <RotateCw className="h-4 w-4" />
         </button>
-
-        <button
-          className="btn-control btn-speed"
-          onClick={handleSpeedChange}
-          disabled={!audioUrl || isProcessing}
-          title="Tốc độ"
-        >
+        <button className="h-9 rounded-full border border-white/10 bg-white/[0.05] px-3 font-mono text-xs font-bold text-zinc-300 transition hover:scale-105 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40" onClick={handleSpeedChange} disabled={!audioUrl || isProcessing} title="Tốc độ">
           {playbackRate}x
         </button>
-
-        <button
-          className="btn-control"
-          onClick={handleMute}
-          disabled={!audioUrl || isProcessing}
-          title="Mute"
-        >
-          {isMuted ? (
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-              <path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.21.05-.42.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73 4.27 3zM12 4L9.91 6.09 12 8.18V4z" />
-            </svg>
-          ) : (
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-              <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z" />
-            </svg>
-          )}
+        <button className="player-icon-button" onClick={handleMute} disabled={!audioUrl || isProcessing} title="Mute">
+          {isMuted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
         </button>
+        <input
+          className="w-24 accent-emerald-400"
+          type="range"
+          min="0"
+          max="1"
+          step="0.01"
+          value={volume}
+          onChange={(event) => handleVolumeChange(parseFloat(event.target.value))}
+          disabled={!audioUrl || isProcessing}
+          aria-label="Âm lượng"
+        />
 
-        {downloadFileName && (
-          <a
-            className="btn-control btn-download"
-            href={audioUrl || undefined}
-            download={downloadFileName}
-            aria-disabled={!audioUrl || isProcessing}
-            onClick={(e) => {
-              if (!audioUrl || isProcessing) e.preventDefault();
-            }}
-            aria-label="Tải WAV"
-            title="Tải WAV"
-          >
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-              <path d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z" />
-            </svg>
-          </a>
-        )}
+        <div className="ml-auto flex items-center gap-2">
+          {downloadFileName && (
+            <a
+              className="player-icon-button"
+              href={audioUrl || undefined}
+              download={downloadFileName}
+              aria-disabled={!audioUrl || isProcessing}
+              onClick={(e) => {
+                if (!audioUrl || isProcessing) e.preventDefault();
+              }}
+              aria-label="Tải WAV"
+              title="Tải WAV"
+            >
+              <Download className="h-4 w-4" />
+            </a>
+          )}
+
+          {showShareButton && (
+            <button className="player-icon-button" onClick={handleSave} disabled={!audioUrl || isProcessing} title="Share / Save">
+              <BookmarkPlus className="h-4 w-4" />
+            </button>
+          )}
+        </div>
 
         {cropStart !== null && cropEnd !== null && (
-          <button className="btn-action btn-crop-apply" onClick={applyCrop}>
-            Cắt (Crop)
+          <button className="rounded-full border border-emerald-300/30 bg-emerald-400/10 px-3 py-2 text-xs font-bold text-emerald-100 transition hover:bg-emerald-400 hover:text-zinc-950" onClick={applyCrop}>
+            <Scissors className="mr-1 inline h-3.5 w-3.5" />
+            Cắt
           </button>
         )}
 
         {currentAudioData !== originalAudioData && (
-          <button className="btn-action btn-crop-reset" onClick={resetCrop}>
+          <button className="rounded-full border border-red-300/25 bg-red-400/10 px-3 py-2 text-xs font-bold text-red-100 transition hover:bg-red-500 hover:text-white" onClick={resetCrop}>
+            <RefreshCcw className="mr-1 inline h-3.5 w-3.5" />
             Reset
           </button>
         )}
