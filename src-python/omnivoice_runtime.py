@@ -1,7 +1,7 @@
 import importlib
 import os
 import re
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
 
 import numpy as np
@@ -85,8 +85,8 @@ def default_model_cache_dir():
     if os.name == "nt":
         root = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
         if root:
-            return str(Path(root) / "Voice Clone" / "models")
-    return str(Path.home() / "Library" / "Application Support" / "Voice Clone" / "models")
+            return str(PureWindowsPath(root) / "Voice Clone" / "models")
+    return str(Path.home() / ".voiceclone" / "models")
 
 
 def normalize_language_id(language_id):

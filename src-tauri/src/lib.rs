@@ -72,7 +72,10 @@ fn prepend_path_dir(command: &mut Command, dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn spawn_runtime_sidecar(app_handle: &tauri::AppHandle, state: &SidecarState) -> Result<(), String> {
+fn spawn_runtime_sidecar(
+    app_handle: &tauri::AppHandle,
+    state: &SidecarState,
+) -> Result<(), String> {
     if sidecar_is_running(state)? {
         return Ok(());
     }
@@ -80,11 +83,14 @@ fn spawn_runtime_sidecar(app_handle: &tauri::AppHandle, state: &SidecarState) ->
     let base = setup::get_base_dir(app_handle)?;
     let python = setup::python_path(&base);
     let ffmpeg_dir = setup::ffmpeg_dir(&base);
-    let models_dir = setup::models_dir(&base);
+    let models_dir = setup::models_dir(app_handle)?;
     let sidecar_script = resolve_sidecar_script(app_handle)?;
 
     if !python.is_file() {
-        return Err(format!("Python runtime is not installed at {}", python.display()));
+        return Err(format!(
+            "Python runtime is not installed at {}",
+            python.display()
+        ));
     }
     if !setup::ffmpeg_path(&base).is_file() {
         return Err(format!(
@@ -93,8 +99,12 @@ fn spawn_runtime_sidecar(app_handle: &tauri::AppHandle, state: &SidecarState) ->
         ));
     }
 
-    std::fs::create_dir_all(&models_dir)
-        .map_err(|e| format!("Failed to create folder cache directory {}: {e}", models_dir.display()))?;
+    std::fs::create_dir_all(&models_dir).map_err(|e| {
+        format!(
+            "Failed to create folder cache directory {}: {e}",
+            models_dir.display()
+        )
+    })?;
 
     let mut command = Command::new(&python);
     command
@@ -197,7 +207,12 @@ fn send_to_sidecar(state: State<'_, SidecarState>, msg: String) -> Result<(), St
                 return Err(format!("Sidecar exited before handling command: {status}"));
             }
         } else {
-            if let Some(error) = state.startup_error.lock().map_err(|e| e.to_string())?.as_ref() {
+            if let Some(error) = state
+                .startup_error
+                .lock()
+                .map_err(|e| e.to_string())?
+                .as_ref()
+            {
                 return Err(format!("Python sidecar is not running: {error}"));
             }
             return Err("Python sidecar is not running".to_string());

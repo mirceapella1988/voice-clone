@@ -41,15 +41,27 @@ pub fn get_base_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
         .map_err(|e| format!("Failed to resolve app local data directory: {e}"))
 }
 
-pub fn models_dir(base: &Path) -> PathBuf {
-    base.join("models")
+pub fn models_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    if cfg!(target_os = "windows") {
+        return Ok(get_base_dir(app_handle)?.join("models"));
+    }
+
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+        .ok_or_else(|| "Failed to resolve user home directory for folder cache".to_string())?;
+
+    Ok(home.join(".voiceclone").join("models"))
 }
 
 pub fn python_path(base: &Path) -> PathBuf {
     if cfg!(target_os = "windows") {
         base.join("runtime").join("python").join("python.exe")
     } else {
-        base.join("runtime").join("python").join("bin").join("python3")
+        base.join("runtime")
+            .join("python")
+            .join("bin")
+            .join("python3")
     }
 }
 
@@ -67,7 +79,10 @@ pub fn ffmpeg_path(base: &Path) -> PathBuf {
 
 fn python_site_packages_dir(base: &Path) -> PathBuf {
     if cfg!(target_os = "windows") {
-        base.join("runtime").join("python").join("Lib").join("site-packages")
+        base.join("runtime")
+            .join("python")
+            .join("Lib")
+            .join("site-packages")
     } else {
         base.join("runtime")
             .join("python")
@@ -84,7 +99,7 @@ pub fn torch_dir(base: &Path) -> PathBuf {
 #[tauri::command]
 pub async fn check_runtime(app_handle: tauri::AppHandle) -> Result<RuntimeStatus, String> {
     let base = get_base_dir(&app_handle)?;
-    let models = models_dir(&base);
+    let models = models_dir(&app_handle)?;
 
     Ok(RuntimeStatus {
         has_python: python_path(&base).is_file(),
@@ -133,7 +148,7 @@ pub async fn install_runtime(app_handle: tauri::AppHandle, gpu: String) -> Resul
     let runtime = base.join("runtime");
     let python_dir = runtime.join("python");
     let ffmpeg = ffmpeg_dir(&base);
-    let models = models_dir(&base);
+    let models = models_dir(&app_handle)?;
     let downloads = runtime.join("downloads");
 
     tokio::fs::create_dir_all(&python_dir)
@@ -149,7 +164,12 @@ pub async fn install_runtime(app_handle: tauri::AppHandle, gpu: String) -> Resul
         .await
         .map_err(|e| format!("Failed to create downloads directory: {e}"))?;
 
-    emit_progress(&app_handle, "prepare", "Preparing runtime directories...", 2);
+    emit_progress(
+        &app_handle,
+        "prepare",
+        "Preparing runtime directories...",
+        2,
+    );
 
     if cfg!(target_os = "windows") {
         install_windows_runtime(&app_handle, &downloads, &python_dir, &ffmpeg, &gpu).await?;
@@ -157,7 +177,12 @@ pub async fn install_runtime(app_handle: tauri::AppHandle, gpu: String) -> Resul
         install_macos_runtime(&app_handle, &downloads, &python_dir, &ffmpeg).await?;
     }
 
-    emit_progress(&app_handle, "complete", "Runtime installation complete.", 100);
+    emit_progress(
+        &app_handle,
+        "complete",
+        "Runtime installation complete.",
+        100,
+    );
     let _ = app_handle.emit(
         "install-complete",
         serde_json::json!({
@@ -190,9 +215,23 @@ async fn install_windows_runtime(
     fix_windows_python_pth(python_dir).await?;
 
     let get_pip = python_dir.join("get-pip.py");
-    download_with_retry(app_handle, GET_PIP_URL, &get_pip, "Downloading pip bootstrap...", 20, 25).await?;
+    download_with_retry(
+        app_handle,
+        GET_PIP_URL,
+        &get_pip,
+        "Downloading pip bootstrap...",
+        20,
+        25,
+    )
+    .await?;
     emit_progress(app_handle, "python", "Installing pip...", 26);
-    run_command(app_handle, &python_dir.join("python.exe"), &[get_pip.to_string_lossy().as_ref()], None).await?;
+    run_command(
+        app_handle,
+        &python_dir.join("python.exe"),
+        &[get_pip.to_string_lossy().as_ref()],
+        None,
+    )
+    .await?;
 
     let ffmpeg_zip = downloads.join("ffmpeg-windows.zip");
     download_with_retry(
@@ -238,7 +277,15 @@ async fn install_macos_runtime(
     run_command(app_handle, &python, &["-m", "ensurepip"], None).await?;
 
     let ffmpeg_zip = downloads.join("ffmpeg-macos.zip");
-    download_with_retry(app_handle, FFMPEG_MACOS_URL, &ffmpeg_zip, "Downloading FFmpeg...", 30, 42).await?;
+    download_with_retry(
+        app_handle,
+        FFMPEG_MACOS_URL,
+        &ffmpeg_zip,
+        "Downloading FFmpeg...",
+        30,
+        42,
+    )
+    .await?;
     extract_ffmpeg_from_zip(&ffmpeg_zip, ffmpeg_dir, false).await?;
     chmod_executable(&ffmpeg_dir.join("ffmpeg")).await?;
 
@@ -251,7 +298,13 @@ async fn install_python_packages(
     gpu: &str,
 ) -> Result<(), String> {
     emit_progress(app_handle, "packages", "Upgrading pip...", 45);
-    run_command(app_handle, python, &["-m", "pip", "install", "--upgrade", "pip"], None).await?;
+    run_command(
+        app_handle,
+        python,
+        &["-m", "pip", "install", "--upgrade", "pip"],
+        None,
+    )
+    .await?;
 
     let torch_index = match gpu {
         "cu128" => Some("https://download.pytorch.org/whl/cu128"),
@@ -260,7 +313,12 @@ async fn install_python_packages(
         _ => None,
     };
 
-    emit_progress(app_handle, "packages", "Installing PyTorch runtime packages...", 50);
+    emit_progress(
+        app_handle,
+        "packages",
+        "Installing PyTorch runtime packages...",
+        50,
+    );
     let mut torch_args = vec!["-m", "pip", "install", "torch", "torchvision", "torchaudio"];
     if let Some(index) = torch_index {
         torch_args.push("--index-url");
@@ -268,7 +326,12 @@ async fn install_python_packages(
     }
     run_command(app_handle, python, &torch_args, None).await?;
 
-    emit_progress(app_handle, "packages", "Installing Voice Clone Python packages...", 78);
+    emit_progress(
+        app_handle,
+        "packages",
+        "Installing Voice Clone Python packages...",
+        78,
+    );
     run_command(
         app_handle,
         python,
@@ -308,7 +371,18 @@ async fn download_with_retry(
 
     let mut last_error = None;
     for attempt in 1..=DOWNLOAD_RETRIES {
-        match download_once(&client, app_handle, url, dest, message, start_percent, end_percent, attempt).await {
+        match download_once(
+            &client,
+            app_handle,
+            url,
+            dest,
+            message,
+            start_percent,
+            end_percent,
+            attempt,
+        )
+        .await
+        {
             Ok(()) => return Ok(()),
             Err(e) => {
                 last_error = Some(e);
@@ -345,7 +419,10 @@ async fn download_once(
         .map_err(|e| format!("Download request failed for {url}: {e}"))?;
 
     if !response.status().is_success() {
-        return Err(format!("Download failed for {url}: HTTP {}", response.status()));
+        return Err(format!(
+            "Download failed for {url}: HTTP {}",
+            response.status()
+        ));
     }
 
     let total = response.content_length().unwrap_or(0);
@@ -392,11 +469,15 @@ async fn extract_zip_all(zip_path: &Path, extract_to: &Path) -> Result<(), Strin
 }
 
 fn extract_zip_all_sync(zip_path: &Path, extract_to: &Path) -> Result<(), String> {
-    let file = File::open(zip_path).map_err(|e| format!("Failed to open zip {}: {e}", zip_path.display()))?;
-    let mut archive = ZipArchive::new(file).map_err(|e| format!("Failed to read zip {}: {e}", zip_path.display()))?;
+    let file = File::open(zip_path)
+        .map_err(|e| format!("Failed to open zip {}: {e}", zip_path.display()))?;
+    let mut archive = ZipArchive::new(file)
+        .map_err(|e| format!("Failed to read zip {}: {e}", zip_path.display()))?;
 
     for i in 0..archive.len() {
-        let mut entry = archive.by_index(i).map_err(|e| format!("Failed to read zip entry: {e}"))?;
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| format!("Failed to read zip entry: {e}"))?;
         let Some(path) = safe_zip_entry_path(entry.name()) else {
             continue;
         };
@@ -410,8 +491,8 @@ fn extract_zip_all_sync(zip_path: &Path, extract_to: &Path) -> Result<(), String
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("Failed to create directory {}: {e}", parent.display()))?;
         }
-        let mut outfile =
-            File::create(&outpath).map_err(|e| format!("Failed to create file {}: {e}", outpath.display()))?;
+        let mut outfile = File::create(&outpath)
+            .map_err(|e| format!("Failed to create file {}: {e}", outpath.display()))?;
         std::io::copy(&mut entry, &mut outfile)
             .map_err(|e| format!("Failed to extract file {}: {e}", outpath.display()))?;
     }
@@ -419,7 +500,11 @@ fn extract_zip_all_sync(zip_path: &Path, extract_to: &Path) -> Result<(), String
     Ok(())
 }
 
-async fn extract_ffmpeg_from_zip(zip_path: &Path, ffmpeg_dir: &Path, windows: bool) -> Result<(), String> {
+async fn extract_ffmpeg_from_zip(
+    zip_path: &Path,
+    ffmpeg_dir: &Path,
+    windows: bool,
+) -> Result<(), String> {
     let zip = zip_path.to_path_buf();
     let dest = ffmpeg_dir.to_path_buf();
     tokio::task::spawn_blocking(move || extract_ffmpeg_from_zip_sync(&zip, &dest, windows))
@@ -427,23 +512,35 @@ async fn extract_ffmpeg_from_zip(zip_path: &Path, ffmpeg_dir: &Path, windows: bo
         .map_err(|e| format!("FFmpeg extraction task failed: {e}"))?
 }
 
-fn extract_ffmpeg_from_zip_sync(zip_path: &Path, ffmpeg_dir: &Path, windows: bool) -> Result<(), String> {
-    let file = File::open(zip_path).map_err(|e| format!("Failed to open FFmpeg zip {}: {e}", zip_path.display()))?;
-    let mut archive = ZipArchive::new(file).map_err(|e| format!("Failed to read FFmpeg zip: {e}"))?;
+fn extract_ffmpeg_from_zip_sync(
+    zip_path: &Path,
+    ffmpeg_dir: &Path,
+    windows: bool,
+) -> Result<(), String> {
+    let file = File::open(zip_path)
+        .map_err(|e| format!("Failed to open FFmpeg zip {}: {e}", zip_path.display()))?;
+    let mut archive =
+        ZipArchive::new(file).map_err(|e| format!("Failed to read FFmpeg zip: {e}"))?;
     let wanted = if windows { "ffmpeg.exe" } else { "ffmpeg" };
 
     for i in 0..archive.len() {
-        let mut entry = archive.by_index(i).map_err(|e| format!("Failed to read FFmpeg zip entry: {e}"))?;
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| format!("Failed to read FFmpeg zip entry: {e}"))?;
         let name = entry.name().replace('\\', "/");
         if !name.ends_with(wanted) || (windows && !name.contains("/bin/")) {
             continue;
         }
 
-        std::fs::create_dir_all(ffmpeg_dir)
-            .map_err(|e| format!("Failed to create FFmpeg directory {}: {e}", ffmpeg_dir.display()))?;
+        std::fs::create_dir_all(ffmpeg_dir).map_err(|e| {
+            format!(
+                "Failed to create FFmpeg directory {}: {e}",
+                ffmpeg_dir.display()
+            )
+        })?;
         let target = ffmpeg_dir.join(wanted);
-        let mut outfile =
-            File::create(&target).map_err(|e| format!("Failed to create FFmpeg binary {}: {e}", target.display()))?;
+        let mut outfile = File::create(&target)
+            .map_err(|e| format!("Failed to create FFmpeg binary {}: {e}", target.display()))?;
         std::io::copy(&mut entry, &mut outfile)
             .map_err(|e| format!("Failed to extract FFmpeg binary {}: {e}", target.display()))?;
         return Ok(());
@@ -461,13 +558,19 @@ async fn extract_python_standalone_tar(tar_path: &Path, python_dir: &Path) -> Re
 }
 
 fn extract_python_standalone_tar_sync(tar_path: &Path, python_dir: &Path) -> Result<(), String> {
-    let file = File::open(tar_path).map_err(|e| format!("Failed to open Python tar {}: {e}", tar_path.display()))?;
+    let file = File::open(tar_path)
+        .map_err(|e| format!("Failed to open Python tar {}: {e}", tar_path.display()))?;
     let decoder = GzDecoder::new(file);
     let mut archive = Archive::new(decoder);
 
-    for entry in archive.entries().map_err(|e| format!("Failed to read Python tar: {e}"))? {
+    for entry in archive
+        .entries()
+        .map_err(|e| format!("Failed to read Python tar: {e}"))?
+    {
         let mut entry = entry.map_err(|e| format!("Failed to read Python tar entry: {e}"))?;
-        let path = entry.path().map_err(|e| format!("Failed to resolve Python tar entry path: {e}"))?;
+        let path = entry
+            .path()
+            .map_err(|e| format!("Failed to resolve Python tar entry path: {e}"))?;
         let stripped = strip_python_archive_prefix(&path);
         if stripped.as_os_str().is_empty() {
             continue;
@@ -503,10 +606,12 @@ fn safe_zip_entry_path(name: &str) -> Option<PathBuf> {
     if path.is_absolute() {
         return None;
     }
-    if path
-        .components()
-        .any(|component| matches!(component, std::path::Component::ParentDir | std::path::Component::Prefix(_)))
-    {
+    if path.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::ParentDir | std::path::Component::Prefix(_)
+        )
+    }) {
         return None;
     }
     Some(path.to_path_buf())
@@ -571,7 +676,9 @@ async fn run_command(
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    Err(format!("Command failed: {label}\nstdout: {stdout}\nstderr: {stderr}"))
+    Err(format!(
+        "Command failed: {label}\nstdout: {stdout}\nstderr: {stderr}"
+    ))
 }
 
 fn emit_progress(app_handle: &tauri::AppHandle, stage: &'static str, message: &str, percent: u8) {

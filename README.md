@@ -10,7 +10,7 @@ Tauri desktop app for zero-shot voice cloning with [OmniVoice](https://huggingfa
 
 | Platform | Runtime root | Folder cache |
 | --- | --- | --- |
-| macOS | `~/Library/Application Support/Voice Clone/runtime` | `~/Library/Application Support/Voice Clone/models` |
+| macOS | `~/Library/Application Support/Voice Clone/runtime` | `~/.voiceclone/models` |
 | Windows | `%LOCALAPPDATA%\Voice Clone\runtime` | `%LOCALAPPDATA%\Voice Clone\models` |
 
 Runtime layout:
@@ -20,7 +20,14 @@ Voice Clone/
   runtime/
     python/
     ffmpeg/
-  models/
+  models/  # Windows only
+```
+
+Model cache layout:
+
+```text
+.voiceclone/
+  models/  # macOS only
 ```
 
 The bundled app includes only the Tauri shell and Python source files required to run the local runtime. Model weights are downloaded from Hugging Face on first model load and cached in `models/`.
@@ -115,7 +122,7 @@ This is expected. The app installs Python, FFmpeg, PyTorch, and voice-cloning pa
 
 ### First model load is slow
 
-This is expected. The app downloads `k2-fsa/OmniVoice` to the app local data `models` folder the first time the user loads the model.
+This is expected. The app downloads `k2-fsa/OmniVoice` to `~/.voiceclone/models` on macOS or `%LOCALAPPDATA%\Voice Clone\models` on Windows the first time the user loads the model.
 
 ### macOS app is blocked by Gatekeeper
 

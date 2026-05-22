@@ -1,6 +1,6 @@
 import os
 import sys
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from huggingface_hub import snapshot_download
 
@@ -11,8 +11,8 @@ def default_model_cache_dir():
     if os.name == "nt":
         root = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
         if root:
-            return str(Path(root) / "Voice Clone" / "models")
-    return str(Path.home() / "Library" / "Application Support" / "Voice Clone" / "models")
+            return str(PureWindowsPath(root) / "Voice Clone" / "models")
+    return str(Path.home() / ".voiceclone" / "models")
 
 
 def main():

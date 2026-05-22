@@ -181,7 +181,18 @@ class RuntimeLoadTests(unittest.TestCase):
         with patch.object(omnivoice_runtime.Path, "home", return_value=Path("/Users/example")):
             self.assertEqual(
                 default_model_cache_dir(),
-                str(Path("/Users/example/Library/Application Support/Voice Clone/models")),
+                str(Path("/Users/example/.voiceclone/models")),
+            )
+
+    def test_default_model_cache_dir_uses_windows_app_data(self):
+        with patch.object(omnivoice_runtime.os, "name", "nt"), patch.dict(
+            os.environ,
+            {"LOCALAPPDATA": r"C:\Users\example\AppData\Local"},
+            clear=False,
+        ):
+            self.assertEqual(
+                default_model_cache_dir(),
+                r"C:\Users\example\AppData\Local\Voice Clone\models",
             )
 
     def test_voiceclone_models_env_takes_precedence_over_legacy_app_model_dir(self):
