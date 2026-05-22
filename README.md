@@ -10,7 +10,7 @@ Tauri desktop app for zero-shot voice cloning with [OmniVoice](https://huggingfa
 
 | Platform | Runtime root | Folder cache |
 | --- | --- | --- |
-| macOS | `~/Library/Application Support/Voice Clone/runtime` | `~/Library/Application Support/Voice Clone/models` |
+| macOS | `~/Library/Application Support/com.kiyooo.clone/runtime` | `~/Library/Application Support/com.kiyooo.clone/models` |
 | Windows | `%LOCALAPPDATA%\Voice Clone\runtime` | `%LOCALAPPDATA%\Voice Clone\models` |
 
 Runtime layout:
@@ -85,8 +85,8 @@ Release jobs build the Tauri installers only. They assert that `externalBin`, Py
 Trigger a GitHub release build:
 
 ```bash
-git tag -a v0.4.10 -m "Release v0.4.10"
-git push origin v0.4.10
+git tag -a v0.4.11 -m "Release v0.4.11"
+git push origin v0.4.11
 ```
 
 The Tauri action creates a draft GitHub Release for the tag. Review the generated installers before publishing the release.
@@ -104,7 +104,7 @@ The Tauri action creates a draft GitHub Release for the tag. Review the generate
    - `npm run build -- --clearScreen false`
    - `cd src-tauri && cargo test`
 3. Commit the version and source changes.
-4. Create and push a tag like `v0.4.10`.
+4. Create and push a tag like `v0.4.11`.
 5. Let GitHub Actions build the installers.
 
 ## Troubleshooting

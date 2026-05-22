@@ -181,7 +181,7 @@ class RuntimeLoadTests(unittest.TestCase):
         with patch.object(omnivoice_runtime.Path, "home", return_value=Path("/Users/example")):
             self.assertEqual(
                 default_model_cache_dir(),
-                str(Path("/Users/example/Library/Application Support/Voice Clone/models")),
+                str(Path("/Users/example/Library/Application Support/com.kiyooo.clone/models")),
             )
 
     def test_default_model_cache_dir_uses_windows_app_data(self):

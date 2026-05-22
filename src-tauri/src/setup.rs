@@ -34,11 +34,21 @@ struct InstallProgress {
 }
 
 pub fn get_base_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
-    app_handle
+    let local_data = app_handle
         .path()
         .app_local_data_dir()
         .or_else(|_| app_handle.path().app_data_dir())
-        .map_err(|e| format!("Failed to resolve app local data directory: {e}"))
+        .map_err(|e| format!("Failed to resolve app local data directory: {e}"))?;
+
+    if cfg!(target_os = "windows") {
+        if let Some(parent) = local_data.parent() {
+            Ok(parent.join("Voice Clone"))
+        } else {
+            Ok(local_data)
+        }
+    } else {
+        Ok(local_data)
+    }
 }
 
 pub fn models_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -714,7 +724,7 @@ mod tests {
 
     #[test]
     fn runtime_paths_use_app_local_data_root() {
-        let base = PathBuf::from("/Users/example/Library/Application Support/Voice Clone");
+        let base = PathBuf::from("/Users/example/Library/Application Support/com.kiyooo.clone");
 
         if cfg!(target_os = "windows") {
             assert_eq!(python_path(&base), base.join("runtime/python/python.exe"));
@@ -727,7 +737,7 @@ mod tests {
 
     #[test]
     fn torch_detection_path_targets_site_packages() {
-        let base = PathBuf::from("/Users/example/Library/Application Support/Voice Clone");
+        let base = PathBuf::from("/Users/example/Library/Application Support/com.kiyooo.clone");
         let torch = torch_dir(&base).to_string_lossy().replace('\\', "/");
 
         assert!(torch.ends_with("site-packages/torch"));
