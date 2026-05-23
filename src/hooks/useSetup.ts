@@ -6,7 +6,12 @@ export interface RuntimeStatus {
   has_python: boolean;
   has_ffmpeg: boolean;
   has_torch: boolean;
+  has_runtime_packages?: boolean;
+  has_source_files?: boolean;
+  is_ready?: boolean;
   models_path: string;
+  missing_components?: string[];
+  details?: string[];
 }
 
 export interface SetupProgress {
@@ -43,6 +48,23 @@ const parseProgressPayload = (payload: unknown): SetupProgress | null => {
     message: String(value.message || "Preparing the runtime for first launch..."),
     percent: Math.max(0, Math.min(100, Number(value.percent || 0))),
   };
+};
+
+const runtimeIsReady = (runtime: RuntimeStatus) =>
+  runtime.is_ready ?? (
+    runtime.has_python &&
+    runtime.has_ffmpeg &&
+    runtime.has_torch &&
+    runtime.has_runtime_packages !== false &&
+    runtime.has_source_files !== false
+  );
+
+const formatMissingRuntime = (runtime: RuntimeStatus) => {
+  const missing = runtime.missing_components?.filter(Boolean) || [];
+  const detail = runtime.details?.filter(Boolean) || [];
+  const missingText = missing.length > 0 ? missing.join(", ") : "unknown runtime components";
+  const detailText = detail.length > 0 ? `\n\nDetails:\n${detail.join("\n\n")}` : "";
+  return `${missingText}${detailText}`;
 };
 
 export function useSetup(appendLog?: (message: string) => void): SetupState {
@@ -107,11 +129,15 @@ export function useSetup(appendLog?: (message: string) => void): SetupState {
         if (disposed || activeRunRef.current !== runId) return;
         setRuntime(firstStatus);
 
-        if (!firstStatus.has_python || !firstStatus.has_ffmpeg || !firstStatus.has_torch) {
+        if (firstStatus.has_source_files === false) {
+          throw new Error(`Application runtime files are missing: ${formatMissingRuntime(firstStatus)}`);
+        }
+
+        if (!runtimeIsReady(firstStatus)) {
           setStatus("installing");
           setProgress({
             stage: "detecting",
-            message: "Detecting GPU and preparing runtime installation...",
+            message: `Repairing missing runtime components: ${firstStatus.missing_components?.join(", ") || "runtime packages"}...`,
             percent: 1,
           });
           const detectedGpu = await invoke<string>("get_gpu_type");
@@ -127,8 +153,8 @@ export function useSetup(appendLog?: (message: string) => void): SetupState {
         if (disposed || activeRunRef.current !== runId) return;
         setRuntime(readyStatus);
 
-        if (!readyStatus.has_python || !readyStatus.has_ffmpeg || !readyStatus.has_torch) {
-          throw new Error("Runtime installation finished but required components are still missing.");
+        if (!runtimeIsReady(readyStatus)) {
+          throw new Error(`Runtime repair finished but required components are still missing: ${formatMissingRuntime(readyStatus)}`);
         }
 
         setStatus("starting");

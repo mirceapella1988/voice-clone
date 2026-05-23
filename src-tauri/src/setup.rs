@@ -21,13 +21,34 @@ const FFMPEG_MACOS_URLS: &[&str] = &[
     "https://deolaha.ca/pub/ffmpeg/ffmpeg-8.1.1.zip",
 ];
 const DOWNLOAD_RETRIES: usize = 3;
+const REQUIRED_SOURCE_FILES: &[&str] = &["sidecar.py", "omnivoice_runtime.py", "requirements.txt"];
+const REQUIRED_PYTHON_MODULES: &[&str] = &[
+    "numpy",
+    "torch",
+    "torchaudio",
+    "transformers",
+    "accelerate",
+    "pydub",
+    "soundfile",
+    "librosa",
+    "huggingface_hub",
+    "hf_xet",
+    "hf_transfer",
+    "faster_whisper",
+    "omnivoice",
+];
 
 #[derive(Debug, Serialize)]
 pub struct RuntimeStatus {
     pub has_python: bool,
     pub has_ffmpeg: bool,
     pub has_torch: bool,
+    pub has_runtime_packages: bool,
+    pub has_source_files: bool,
+    pub is_ready: bool,
     pub models_path: String,
+    pub missing_components: Vec<String>,
+    pub details: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -101,16 +122,186 @@ pub fn torch_dir(base: &Path) -> PathBuf {
     python_site_packages_dir(base).join("torch")
 }
 
+fn source_dir_candidates(app_handle: &tauri::AppHandle) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if cfg!(debug_assertions) {
+        if let Ok(current_dir) = std::env::current_dir() {
+            candidates.push(current_dir.join("src-python"));
+            if current_dir
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.eq_ignore_ascii_case("src-tauri"))
+            {
+                if let Some(parent) = current_dir.parent() {
+                    candidates.push(parent.join("src-python"));
+                }
+            }
+        }
+
+        if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+            let manifest_dir = PathBuf::from(manifest_dir);
+            if let Some(parent) = manifest_dir.parent() {
+                candidates.push(parent.join("src-python"));
+            }
+        }
+    }
+
+    if let Ok(resource_dir) = app_handle.path().resource_dir() {
+        candidates.push(resource_dir.join("src-python"));
+    }
+
+    candidates
+}
+
+fn source_files_are_available(app_handle: &tauri::AppHandle) -> bool {
+    source_dir_candidates(app_handle)
+        .into_iter()
+        .any(|dir| REQUIRED_SOURCE_FILES.iter().all(|file| dir.join(file).is_file()))
+}
+
+async fn command_succeeds(program: &Path, args: &[&str], timeout_secs: u64) -> Result<(), String> {
+    let mut command = Command::new(program);
+    command.args(args);
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let output = tokio::time::timeout(Duration::from_secs(timeout_secs), command.output())
+        .await
+        .map_err(|_| format!("Command timed out: {} {}", program.display(), args.join(" ")))?
+        .map_err(|e| format!("Failed to run command {}: {e}", program.display()))?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    Err(format!(
+        "Command failed: {} {}\nstdout: {}\nstderr: {}",
+        program.display(),
+        args.join(" "),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    ))
+}
+
+async fn python_packages_are_available(python: &Path) -> Result<(), String> {
+    let modules = REQUIRED_PYTHON_MODULES.join(",");
+    let script = r#"
+import importlib
+import os
+import sys
+
+missing = []
+for module in os.environ["VOICECLONE_REQUIRED_MODULES"].split(","):
+    try:
+        importlib.import_module(module)
+    except Exception as exc:
+        missing.append(f"{module}: {type(exc).__name__}: {exc}")
+
+if missing:
+    print("\n".join(missing), file=sys.stderr)
+    raise SystemExit(1)
+"#;
+
+    let mut command = Command::new(python);
+    command.args(["-c", script]);
+    command.env("VOICECLONE_REQUIRED_MODULES", modules);
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let output = tokio::time::timeout(Duration::from_secs(90), command.output())
+        .await
+        .map_err(|_| "Python package health check timed out".to_string())?
+        .map_err(|e| format!("Failed to run Python package health check: {e}"))?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    Err(format!(
+        "Python package health check failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    ))
+}
+
 #[tauri::command]
 pub async fn check_runtime(app_handle: tauri::AppHandle) -> Result<RuntimeStatus, String> {
     let base = get_base_dir(&app_handle)?;
     let models = models_dir(&app_handle)?;
+    let python = python_path(&base);
+    let ffmpeg = ffmpeg_path(&base);
+
+    let mut missing_components = Vec::new();
+    let mut details = Vec::new();
+
+    let has_python = python.is_file()
+        && match command_succeeds(&python, &["--version"], 20).await {
+            Ok(()) => true,
+            Err(error) => {
+                details.push(error);
+                false
+            }
+        };
+    if !has_python {
+        missing_components.push("python runtime".to_string());
+    }
+
+    let has_ffmpeg = ffmpeg.is_file()
+        && match command_succeeds(&ffmpeg, &["-version"], 20).await {
+            Ok(()) => true,
+            Err(error) => {
+                details.push(error);
+                false
+            }
+        };
+    if !has_ffmpeg {
+        missing_components.push("ffmpeg runtime".to_string());
+    }
+
+    let has_torch = torch_dir(&base).is_dir();
+    if !has_torch {
+        missing_components.push("torch package".to_string());
+    }
+
+    let has_runtime_packages = has_python
+        && match python_packages_are_available(&python).await {
+            Ok(()) => true,
+            Err(error) => {
+                details.push(error);
+                false
+            }
+        };
+    if !has_runtime_packages {
+        missing_components.push("python packages".to_string());
+    }
+
+    let has_source_files = source_files_are_available(&app_handle);
+    if !has_source_files {
+        missing_components.push("application python source files".to_string());
+    }
+
+    let is_ready = has_python && has_ffmpeg && has_torch && has_runtime_packages && has_source_files;
 
     Ok(RuntimeStatus {
-        has_python: python_path(&base).is_file(),
-        has_ffmpeg: ffmpeg_path(&base).is_file(),
-        has_torch: torch_dir(&base).is_dir(),
+        has_python,
+        has_ffmpeg,
+        has_torch,
+        has_runtime_packages,
+        has_source_files,
+        is_ready,
         models_path: models.to_string_lossy().to_string(),
+        missing_components,
+        details,
     })
 }
 
@@ -169,6 +360,11 @@ pub async fn install_runtime(app_handle: tauri::AppHandle, gpu: String) -> Resul
         .await
         .map_err(|e| format!("Failed to create downloads directory: {e}"))?;
 
+    let python = python_path(&base);
+    let needs_python = !python.is_file();
+    let needs_ffmpeg = !ffmpeg_path(&base).is_file();
+    let needs_packages = needs_python || python_packages_are_available(&python).await.is_err();
+
     emit_progress(
         &app_handle,
         "prepare",
@@ -177,9 +373,28 @@ pub async fn install_runtime(app_handle: tauri::AppHandle, gpu: String) -> Resul
     );
 
     if cfg!(target_os = "windows") {
-        install_windows_runtime(&app_handle, &downloads, &python_dir, &ffmpeg, &gpu).await?;
+        install_windows_runtime(
+            &app_handle,
+            &downloads,
+            &python_dir,
+            &ffmpeg,
+            &gpu,
+            needs_python,
+            needs_ffmpeg,
+            needs_packages,
+        )
+        .await?;
     } else {
-        install_macos_runtime(&app_handle, &downloads, &python_dir, &ffmpeg).await?;
+        install_macos_runtime(
+            &app_handle,
+            &downloads,
+            &python_dir,
+            &ffmpeg,
+            needs_python,
+            needs_ffmpeg,
+            needs_packages,
+        )
+        .await?;
     }
 
     emit_progress(
@@ -205,52 +420,70 @@ async fn install_windows_runtime(
     python_dir: &Path,
     ffmpeg_dir: &Path,
     gpu: &str,
+    needs_python: bool,
+    needs_ffmpeg: bool,
+    needs_packages: bool,
 ) -> Result<(), String> {
-    let python_zip = downloads.join("python-embed.zip");
-    download_with_retry(
-        app_handle,
-        PYTHON_WINDOWS_URL,
-        &python_zip,
-        "Downloading Python runtime...",
-        5,
-        20,
-    )
-    .await?;
-    extract_zip_all(&python_zip, python_dir).await?;
-    fix_windows_python_pth(python_dir).await?;
+    if needs_python {
+        let python_zip = downloads.join("python-embed.zip");
+        download_with_retry(
+            app_handle,
+            PYTHON_WINDOWS_URL,
+            &python_zip,
+            "Downloading Python runtime...",
+            5,
+            20,
+        )
+        .await?;
+        extract_zip_all(&python_zip, python_dir).await?;
+        fix_windows_python_pth(python_dir).await?;
+    } else {
+        emit_progress(app_handle, "python", "Python runtime already installed.", 20);
+    }
 
-    let get_pip = python_dir.join("get-pip.py");
-    download_with_retry(
-        app_handle,
-        GET_PIP_URL,
-        &get_pip,
-        "Downloading pip bootstrap...",
-        20,
-        25,
-    )
-    .await?;
-    emit_progress(app_handle, "python", "Installing pip...", 26);
-    run_command(
-        app_handle,
-        &python_dir.join("python.exe"),
-        &[get_pip.to_string_lossy().as_ref()],
-        None,
-    )
-    .await?;
+    if needs_packages {
+        let get_pip = python_dir.join("get-pip.py");
+        download_with_retry(
+            app_handle,
+            GET_PIP_URL,
+            &get_pip,
+            "Downloading pip bootstrap...",
+            20,
+            25,
+        )
+        .await?;
+        emit_progress(app_handle, "python", "Installing pip...", 26);
+        run_command(
+            app_handle,
+            &python_dir.join("python.exe"),
+            &[get_pip.to_string_lossy().as_ref()],
+            None,
+        )
+        .await?;
+    }
 
-    let ffmpeg_zip = downloads.join("ffmpeg-windows.zip");
-    download_with_retry(
-        app_handle,
-        FFMPEG_WINDOWS_URL,
-        &ffmpeg_zip,
-        "Downloading FFmpeg...",
-        30,
-        42,
-    )
-    .await?;
-    extract_ffmpeg_from_zip(&ffmpeg_zip, ffmpeg_dir, true).await?;
+    if needs_ffmpeg {
+        let ffmpeg_zip = downloads.join("ffmpeg-windows.zip");
+        download_with_retry(
+            app_handle,
+            FFMPEG_WINDOWS_URL,
+            &ffmpeg_zip,
+            "Downloading FFmpeg...",
+            30,
+            42,
+        )
+        .await?;
+        extract_ffmpeg_from_zip(&ffmpeg_zip, ffmpeg_dir, true).await?;
+    } else {
+        emit_progress(app_handle, "ffmpeg", "FFmpeg runtime already installed.", 42);
+    }
 
-    install_python_packages(app_handle, &python_dir.join("python.exe"), gpu).await
+    if needs_packages {
+        install_python_packages(app_handle, &python_dir.join("python.exe"), gpu).await
+    } else {
+        emit_progress(app_handle, "packages", "Python packages already installed.", 95);
+        Ok(())
+    }
 }
 
 async fn install_macos_runtime(
@@ -258,43 +491,61 @@ async fn install_macos_runtime(
     downloads: &Path,
     python_dir: &Path,
     ffmpeg_dir: &Path,
+    needs_python: bool,
+    needs_ffmpeg: bool,
+    needs_packages: bool,
 ) -> Result<(), String> {
-    let python_url = if cfg!(target_arch = "aarch64") {
-        PYTHON_MACOS_AARCH64_URL
+    if needs_python {
+        let python_url = if cfg!(target_arch = "aarch64") {
+            PYTHON_MACOS_AARCH64_URL
+        } else {
+            PYTHON_MACOS_X86_64_URL
+        };
+        let python_tar = downloads.join("python-standalone.tar.gz");
+        download_with_retry(
+            app_handle,
+            python_url,
+            &python_tar,
+            "Downloading Python runtime...",
+            5,
+            24,
+        )
+        .await?;
+        extract_python_standalone_tar(&python_tar, python_dir).await?;
+        chmod_executable(&python_dir.join("bin").join("python3")).await?;
     } else {
-        PYTHON_MACOS_X86_64_URL
-    };
-    let python_tar = downloads.join("python-standalone.tar.gz");
-    download_with_retry(
-        app_handle,
-        python_url,
-        &python_tar,
-        "Downloading Python runtime...",
-        5,
-        24,
-    )
-    .await?;
-    extract_python_standalone_tar(&python_tar, python_dir).await?;
-    chmod_executable(&python_dir.join("bin").join("python3")).await?;
+        emit_progress(app_handle, "python", "Python runtime already installed.", 24);
+    }
 
     let python = python_dir.join("bin").join("python3");
-    emit_progress(app_handle, "python", "Bootstrapping pip...", 28);
-    run_command(app_handle, &python, &["-m", "ensurepip"], None).await?;
+    if needs_packages {
+        emit_progress(app_handle, "python", "Bootstrapping pip...", 28);
+        run_command(app_handle, &python, &["-m", "ensurepip"], None).await?;
+    }
 
-    let ffmpeg_zip = downloads.join("ffmpeg-macos.zip");
-    download_with_retry_from_urls(
-        app_handle,
-        FFMPEG_MACOS_URLS,
-        &ffmpeg_zip,
-        "Downloading FFmpeg...",
-        30,
-        42,
-    )
-    .await?;
-    extract_ffmpeg_from_zip(&ffmpeg_zip, ffmpeg_dir, false).await?;
-    chmod_executable(&ffmpeg_dir.join("ffmpeg")).await?;
+    if needs_ffmpeg {
+        let ffmpeg_zip = downloads.join("ffmpeg-macos.zip");
+        download_with_retry_from_urls(
+            app_handle,
+            FFMPEG_MACOS_URLS,
+            &ffmpeg_zip,
+            "Downloading FFmpeg...",
+            30,
+            42,
+        )
+        .await?;
+        extract_ffmpeg_from_zip(&ffmpeg_zip, ffmpeg_dir, false).await?;
+        chmod_executable(&ffmpeg_dir.join("ffmpeg")).await?;
+    } else {
+        emit_progress(app_handle, "ffmpeg", "FFmpeg runtime already installed.", 42);
+    }
 
-    install_python_packages(app_handle, &python, "mps").await
+    if needs_packages {
+        install_python_packages(app_handle, &python, "mps").await
+    } else {
+        emit_progress(app_handle, "packages", "Python packages already installed.", 95);
+        Ok(())
+    }
 }
 
 async fn install_python_packages(

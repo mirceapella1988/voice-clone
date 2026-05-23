@@ -20,6 +20,7 @@ export function SetupScreen({ setup }: SetupScreenProps) {
     ? setup.error
     : setup.progress.message || "Preparing the runtime for first launch...";
   const percent = isChecking ? 0 : setup.progress.percent;
+  const missingComponents = setup.runtime?.missing_components?.filter(Boolean) || [];
 
   return (
     <div className="setup-fullscreen-bg">
@@ -44,6 +45,12 @@ export function SetupScreen({ setup }: SetupScreenProps) {
           <span>Folder cache</span>
           <code>{formatRuntimePath(setup.runtime?.models_path)}</code>
         </div>
+
+        {missingComponents.length > 0 && (
+          <div className="setup-runtime-chip">
+            Missing: {missingComponents.join(", ")}
+          </div>
+        )}
 
         {setup.gpu && !isError && (
           <div className="setup-runtime-chip">Runtime profile: {setup.gpu.toUpperCase()}</div>
